@@ -56,7 +56,7 @@ class AgentState(MessagesState):
     market_report: Annotated[str, "Report from the Market Analyst"]
     sentiment_report: Annotated[str, "Report from the Sentiment Analyst"]
     news_report: Annotated[
-        str, "Report from the News Researcher of current world affairs"
+        str, "News report: company filings plus global market conditions that can affect the ticker"
     ]
     fundamentals_report: Annotated[str, "Report from the Fundamentals Researcher"]
 

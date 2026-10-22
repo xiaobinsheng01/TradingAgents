@@ -42,7 +42,7 @@
 
 <div align="center">
 
-🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
+🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 🧰 [Developer docs](#developer-docs-and-agent-loop) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
 
 </div>
 
@@ -58,7 +58,7 @@ TradingAgents is a multi-agent trading framework that mirrors the dynamics of re
   <img src="assets/schema.png" style="width: 100%; height: auto;">
 </p>
 
-> TradingAgents framework is designed for research purposes. Trading performance may vary based on many factors, including the chosen backbone language models, model temperature, trading periods, the quality of data, and other non-deterministic factors. [It is not intended as financial, investment, or trading advice.](https://tauric.ai/disclaimer/)
+> TradingAgents framework is designed for research purposes. It produces on-demand predictions (latest public quotes and news at run time) and **does not place broker orders**. Trading performance may vary based on many factors, including the chosen backbone language models, model temperature, trading periods, the quality of data, and other non-deterministic factors. [It is not intended as financial, investment, or trading advice.](https://tauric.ai/disclaimer/)
 
 Our framework decomposes complex trading tasks into specialized roles.
 
@@ -115,13 +115,32 @@ Install the package and its dependencies:
 pip install .
 ```
 
+### Local web console
+
+```bash
+pip install -e ".[web]"
+tradingagents web   # http://127.0.0.1:8000 — research UI only, never places orders
+```
+
+Same console via Docker (one Dockerfile, two services in `docker-compose.yml`):
+
+```bash
+cp .env.example .env
+docker compose --profile web up    # UI http://127.0.0.1:8000  API http://127.0.0.1:8001
+```
+
+`web-ui` and `web-api` can be started together or individually. The page reads LLM keys from `.env` on the API container. It does not upload reports to Tauric announcements. After a run, markdown lives under `~/.tradingagents/logs/reports/` (Docker volume). The UI button **查询最近一次分析** calls `GET /api/runs/latest`. The **价量 Tape** tab analyzes the last half-month or half-year of price/volume, window news, 缠论 structure, plus disclosed 机构出手 (still `POST /api/runs` with the News Analyst, not a market-data API). The **大盘筛选** tab calls `GET /api/screen` for today's Shanghai/Shenzhen main-board gainers, speed list, and sector leaders (ChiNext, STAR, and Beijing are excluded). If East Money spot or industry boards return HTTP 500, the same request falls back to Sina quotes and the Tonghuashun industry summary. Sina has no intraday speed, turnover, or volume ratio, so those columns stay empty; the gainers table still lists main-board names and sits above the daily chart. If Sina spot is also empty, quotes come from Tencent (`stock_zh_a_spot_tx`), which does include speed. Clicking a row loads a Lightweight Charts daily candlestick and volume pane from `GET /api/screen/bars`. **带入全图分析** fills the full-graph form and does not start a run. If dropdowns on `:8000` are empty after recreating `web-api`, refresh the page or `docker compose --profile web restart web-ui` so nginx re-resolves the API.
+
 ### Docker
 
 Alternatively, run with Docker:
 ```bash
 cp .env.example .env  # add your API keys
 docker compose run --rm tradingagents
+docker compose --profile web up    # local web console (UI + API)
 ```
+
+First image build downloads a large Python stack (LangChain, pandas, …). On a typical home network, **plan 10–20 minutes** for the first `build`; Docker Desktop may look idle while `pip` runs inside the builder stage. Prefer a terminal with live logs (`docker compose --profile web build --progress=plain`) instead of cancelling early. PyPI uses Aliyun in the Dockerfile; base images `python:3.12-slim` / `nginx:alpine` still come from Docker Hub—if pulls time out, mirror-pull and retag them locally before `build` (see `docs/PROJECT.md` Docker notes). Do not add `--pull` on every build unless you intend to refresh bases.
 
 For local models with Ollama:
 ```bash
@@ -138,6 +157,7 @@ export GOOGLE_API_KEY=...          # Google (Gemini)
 export ANTHROPIC_API_KEY=...       # Anthropic (Claude)
 export XAI_API_KEY=...             # xAI (Grok)
 export DEEPSEEK_API_KEY=...        # DeepSeek
+export ARK_API_KEY=...             # Doubao — Volcengine Ark (ark.cn-beijing.volces.com)
 export DASHSCOPE_API_KEY=...       # Qwen — International (dashscope-intl.aliyuncs.com)
 export DASHSCOPE_CN_API_KEY=...    # Qwen — China (dashscope.aliyuncs.com)
 export ZHIPU_API_KEY=...           # GLM via Z.AI (international)
@@ -152,6 +172,10 @@ For Azure OpenAI, copy `.env.enterprise.example` to `.env.enterprise` and fill i
 
 For AWS Bedrock, install the extra with `pip install ".[bedrock]"`, set `llm_provider: "bedrock"`, configure AWS credentials (environment variables, `~/.aws/credentials`, or an IAM role) and `AWS_DEFAULT_REGION`, and use a Bedrock model ID, e.g. `us.anthropic.claude-opus-4-8-v1:0`.
 
+For China A-share news (East Money, exchange filings, CCTV 新闻联播 / domestic newswire (CLS, East Money, Sina, Tonghuashun, Futu) / state media (People's Daily, Xinhua finance, Economic Daily via ce.cn, chinanews finance, CCTV News, gov.cn, CNTV 新闻联播, PBOC, Ministry of Finance, NDRC, NBS)), fundamentals (`get_fundamentals` / three statements via East Money), and the next-session tape (`get_ashare_short_horizon`: limits, breadth, lagged northbound, static industry/commodity exposure including mapped LME/COMEX), either point `AKSHARE_BASE_URL` at a local AKTools HTTP Docker (`docker compose --profile akshare up -d --build aktools`, `http://127.0.0.1:8080`, not the jupyter image on `:8888` and not frozen `aktools:1.8.95`) or `pip install ".[akshare]"`. No extra API key. Default `news_data` for company news is `akshare,yfinance`. `get_global_news` defaults to `akshare,google`: overseas headlines and public X/YouTube/Meta snippets come from Serper (`SERPER_API_KEY`) or Google News RSS if the key is unset. Probe the sidecar at `/docs` or `/api/public/...`; the homepage `/` scrapes PyPI and can 500.
+
+For Doubao (ByteDance Seed models on Volcengine Ark), set `llm_provider: "doubao"`, `ARK_API_KEY`, deep `doubao-seed-2.1-pro`, and quick `doubao-seed-2.1-turbo`. If the Ark console only issues an inference endpoint, paste the `ep-...` ID as the model name.
+
 For local models, configure Ollama with `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
 
 For any other OpenAI-compatible server (vLLM, LM Studio, llama.cpp, or a custom relay), use `llm_provider: "openai_compatible"` and set the endpoint via `backend_url` (or `TRADINGAGENTS_LLM_BACKEND_URL`), e.g. `http://localhost:8000/v1` for vLLM or `http://localhost:1234/v1` for LM Studio. The model is whatever your server serves. No key is needed for local servers; set `OPENAI_COMPATIBLE_API_KEY` when the endpoint requires one.
@@ -165,10 +189,12 @@ cp .env.example .env
 
 Launch the interactive CLI:
 ```bash
-tradingagents          # installed command
+tradingagents          # installed command (interactive analyze)
 python -m cli.main     # alternative: run directly from source
+tradingagents predict 600519.SS   # on-demand live prediction (today, Chinese reports; does not place orders)
+tradingagents score 600519.SS     # T+1 directional hit rate (5-day settled is secondary; research scorecard; not an order)
 ```
-You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
+You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more. `predict` skips the menu: Market + News + Sentiment only, no Fundamentals, and never sends orders to a broker.
 
 ### Markets and tickers
 
@@ -177,7 +203,7 @@ TradingAgents works with any market Yahoo Finance covers, using the exchange-suf
 - US: `AAPL`, `SPY`
 - Hong Kong: `0700.HK` · Tokyo: `7203.T` · London: `AZN.L`
 - India: `RELIANCE.NS`, `.BO` · Canada: `.TO` · Australia: `.AX`
-- China A-shares: Shanghai `.SS`, Shenzhen `.SZ` (e.g. `600519.SS` for Kweichow Moutai)
+- China A-shares: Shanghai `.SS` (also `.SH`), Shenzhen `.SZ` (e.g. `600519.SS` for Kweichow Moutai). Point `AKSHARE_BASE_URL` at local AKTools HTTP (`docker compose --profile akshare up -d --build aktools`) or `pip install ".[akshare]"` for East Money news, cninfo filings, CCTV/CLS/East Money/Sina/Tonghuashun/Futu policy wires plus state media (People's Daily, Xinhua finance, Economic Daily, chinanews finance, CCTV News, gov.cn, CNTV 新闻联播, PBOC, Ministry of Finance, NDRC, NBS; ticker news keeps only rows that name the code or short name), Xueqiu sentiment when `XUEQIU_COOKIE` is set, plus East Money Guba posts (no cookie; keyword bull/bear tally on those posts, not the popularity rank), and the Market Analyst short-horizon tape (next session / 5–20 days: amount, turnover, limit flags, breadth, lagged northbound, a deterministic T+1 playbook stance the final rating follows, static industry/commodity map — 沪铜 and LME/COMEX copper, lithium carbonate, iron ore/SGX, soymeal/CBOT, rubber, crude/NYMEX, or a sector index such as liquor/banks). Daily bars, index history, minutes, and dragon-tiger prefer East Money, then Tencent/Sina when East Money RST's from Docker. Live quotes fall back to Xueqiu then Tencent minutes; a live (not historical) run may approximate limit-up/down counts from Sina's spot table. Headlines are deduped, cached by day, and accumulated in a local JSONL warehouse under the data cache directory. Optional `tradingagents ingest-news 600519.SS --global` is a one-shot pull you can schedule yourself — not an in-process worker. A live tape with an empty warehouse also does one ingest for event flags; historical as-of does not. Xueqiu often needs `XUEQIU_COOKIE` (the client also forwards `xq_a_token`). Yahoo is not queried for A-share tickers (it 404s/429s), including realized-return settlement. `tradingagents score` uses next-session (T+1) directional hits as the primary metric and 5-day settled raw as secondary. Without AKTools HTTP or the extra, A-share prices and the tape are unavailable.
 - Crypto: `BTC-USD`, `ETH-USD`
 
 <p align="center">
@@ -193,6 +219,34 @@ An interface will appear showing results as they load, letting you track the age
 <p align="center">
   <img src="assets/cli/cli_transaction.png" width="100%" style="display: inline-block; margin: 0 2%;">
 </p>
+
+## Developer docs and agent loop
+
+Warehouse facts for contributors and coding agents live under `docs/`. Priority is **code > [docs/PROJECT.md](docs/PROJECT.md) > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) > [Tech Library](docs/tech-library/README.md)**.
+
+| Doc | Role |
+| --- | --- |
+| [docs/PROJECT.md](docs/PROJECT.md) | Required read: boundaries, layout, call chain, reuse list, DoD |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Graph, state, vendor routing, LLM factory, extension points |
+| [docs/tech-library/README.md](docs/tech-library/README.md) | Confirmed technical decisions and their status |
+| [docs/agent-rules/](docs/agent-rules/) | Canonical coding rules (tool adapters only link here) |
+
+**Commands used in development and CI:**
+
+```bash
+pip install -e ".[dev]"
+tradingagents analyze          # or: python -m cli.main analyze
+pytest -q
+ruff check .
+```
+
+**Cross-tool agent entry** (same `project-dev-loop` skill in all three):
+
+- Cursor: `.cursor/skills/project-dev-loop/SKILL.md`
+- Claude Code: `CLAUDE.md` and `.claude/skills/project-dev-loop/SKILL.md`
+- Codex: `AGENTS.md` and `.agents/skills/project-dev-loop/SKILL.md`
+
+The current team loop is repository docs, skills, rules, and code review. GitHub Actions already runs tests/lint/install smoke; PR Template, CODEOWNERS, and Branch Protection are not configured in this phase.
 
 ## TradingAgents Package
 
@@ -222,7 +276,7 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
 
 config = DEFAULT_CONFIG.copy()
-config["llm_provider"] = "openai"        # e.g. openai, google, anthropic, deepseek, groq, ollama; openai_compatible covers any OpenAI-compatible endpoint (vLLM, LM Studio, llama.cpp, ...)
+config["llm_provider"] = "openai"        # e.g. openai, google, anthropic, deepseek, doubao, groq, ollama; openai_compatible covers any OpenAI-compatible endpoint (vLLM, LM Studio, llama.cpp, ...)
 config["deep_think_llm"] = "gpt-5.6"      # Model for complex reasoning
 config["quick_think_llm"] = "gpt-5.6-luna" # Model for quick tasks
 config["max_debate_rounds"] = 2

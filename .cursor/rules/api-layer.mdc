@@ -1,0 +1,7 @@
+---
+description: Data vendor routing and LangChain tool contract
+globs: tradingagents/dataflows/**/*.py,tradingagents/agents/utils/*_tools.py
+alwaysApply: false
+---
+
+Read and follow `docs/agent-rules/api-layer.md`.

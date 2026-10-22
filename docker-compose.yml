@@ -1,12 +1,61 @@
 services:
   tradingagents:
-    build: .
+    build:
+      context: .
+      target: backend
     env_file:
       - .env
+    environment:
+      # Must override host .env loopback. Recreate after compose/code changes:
+      # docker compose --profile web --profile akshare up -d --build --force-recreate
+      - AKSHARE_BASE_URL=http://aktools:8080
+      - AKSHARE_DOCKER_HOST=aktools
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - tradingagents_data:/home/appuser/.tradingagents
     tty: true
     stdin_open: true
+
+  # Local web console: same compose file, two services. Host ports stay on
+  # 127.0.0.1. Start both: docker compose --profile web up
+  # API only: docker compose --profile web up web-api
+  # UI only against an already-running API:
+  #   docker compose --profile web up --no-deps web-ui
+  # After recreating web-api, restart web-ui so nginx re-resolves it
+  # (or rely on the Docker DNS resolver in nginx.conf.template).
+  web-api:
+    build:
+      context: .
+      target: backend
+    env_file:
+      - .env
+    environment:
+      TRADINGAGENTS_WEB_BIND_ALL: "1"
+      AKSHARE_BASE_URL: http://aktools:8080
+      AKSHARE_DOCKER_HOST: aktools
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["web", "--host", "0.0.0.0", "--port", "8000", "--api-only"]
+    volumes:
+      - tradingagents_data:/home/appuser/.tradingagents
+    ports:
+      - "127.0.0.1:8001:8000"
+    profiles:
+      - web
+
+  web-ui:
+    build:
+      context: .
+      target: frontend
+    environment:
+      WEB_API_UPSTREAM: web-api:8000
+    ports:
+      - "127.0.0.1:8000:80"
+    depends_on:
+      - web-api
+    profiles:
+      - web
 
   ollama:
     image: ollama/ollama:latest
@@ -15,13 +64,40 @@ services:
     profiles:
       - ollama
 
+  # AKTools HTTP API for A-share data. The jupyter image on :8888 is a notebook,
+  # not this API. Official `aktools:1.8.95` freezes akshare at 1.8.94 and rejects
+  # codes like 000001. Build docker/aktools.Dockerfile once (akshare>=1.16).
+  # TradingAgents only calls /api/public/<interface>. Verify with /docs, not /.
+  # Start: docker compose --profile akshare up -d --build aktools
+  aktools:
+    build:
+      context: docker
+      dockerfile: aktools.Dockerfile
+    image: tradingagents-aktools:local
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/docs', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    profiles:
+      - akshare
+
   tradingagents-ollama:
-    build: .
+    build:
+      context: .
+      target: backend
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - TRADINGAGENTS_LLM_PROVIDER=ollama
       - OLLAMA_BASE_URL=http://ollama:11434/v1
+      - AKSHARE_BASE_URL=http://aktools:8080
+      - AKSHARE_DOCKER_HOST=aktools
     volumes:
       - tradingagents_data:/home/appuser/.tradingagents
     depends_on:

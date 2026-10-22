@@ -23,3 +23,21 @@ def test_news_prompt_matches_get_news_signature():
     src = inspect.getsource(na)
     assert "get_news(ticker, start_date, end_date)" in src
     assert "get_news(query" not in src
+
+
+@pytest.mark.unit
+def test_news_prompt_covers_policy_and_overseas():
+    src = inspect.getsource(na)
+    assert "A-share filings" in src or "company-specific" in src
+    assert "get_global_news" in src
+    assert "Google Search" in src
+    assert "do not treat unrelated" in src
+    assert "get_news(ticker, start_date, end_date)" in src
+    assert "Leave the tool unused" in src
+    assert "skip US-election" in src
+    assert "get_insider_transactions(ticker, curr_date)" in src
+    assert "增减持" in src
+    assert "half_month" in src
+    assert "90 calendar days" in src
+    assert "180 calendar days" in src
+    assert "Swing tape window" in src

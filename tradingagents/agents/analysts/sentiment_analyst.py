@@ -40,8 +40,10 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.dataflows.ashare_sentiment import fetch_a_share_sentiment
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
+from tradingagents.dataflows.symbol_utils import a_share_code
 
 
 def _seven_days_back(trade_date: str) -> str:
@@ -68,21 +70,32 @@ def create_sentiment_analyst(llm):
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
         news_block = get_news.func(ticker, start_date, end_date)
-        # Pass the analysis window so a historical run trims social posts to it
-        # instead of leaking today's chatter into a backtest (#1220).
-        stocktwits_block = fetch_stocktwits_messages(
-            ticker, limit=30, start_date=start_date, end_date=end_date
-        )
-        reddit_block = fetch_reddit_posts(ticker, start_date=start_date, end_date=end_date)
-
-        system_message = _build_system_message(
-            ticker=ticker,
-            start_date=start_date,
-            end_date=end_date,
-            news_block=news_block,
-            stocktwits_block=stocktwits_block,
-            reddit_block=reddit_block,
-        )
+        ashare = a_share_code(ticker) is not None
+        if ashare:
+            # Mainland listings: Xueqiu / Guba / 千股千评. StockTwits and
+            # Reddit have essentially no A-share coverage and used to be empty
+            # noise (or fabricated) in this prompt.
+            retail_block = fetch_a_share_sentiment(ticker, start_date, end_date)
+            system_message = _build_ashare_system_message(
+                ticker=ticker,
+                start_date=start_date,
+                end_date=end_date,
+                news_block=news_block,
+                retail_block=retail_block,
+            )
+        else:
+            stocktwits_block = fetch_stocktwits_messages(
+                ticker, limit=30, start_date=start_date, end_date=end_date
+            )
+            reddit_block = fetch_reddit_posts(ticker, start_date=start_date, end_date=end_date)
+            system_message = _build_system_message(
+                ticker=ticker,
+                start_date=start_date,
+                end_date=end_date,
+                news_block=news_block,
+                stocktwits_block=stocktwits_block,
+                reddit_block=reddit_block,
+            )
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -188,6 +201,53 @@ Fill the following fields:
 - **overall_score**: A number from 0 (maximally bearish) to 10 (maximally bullish); 5 is neutral. Keep it consistent with overall_band.
 - **confidence**: low / medium / high, based on data quality and sample size.
 - **narrative**: Full source-by-source breakdown, divergences, dominant narrative themes, catalysts and risks, and a markdown summary table of key sentiment signals (direction, source, supporting evidence).
+
+{get_language_instruction()}"""
+
+
+def _build_ashare_system_message(
+    *,
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    news_block: str,
+    retail_block: str,
+) -> str:
+    """Sentiment prompt for China A-shares (Xueqiu / Guba, not StockTwits)."""
+    return f"""You are a financial market sentiment analyst covering China A-shares. Produce a comprehensive sentiment report for {ticker} from {start_date} to {end_date} using the pre-fetched sources below. Do not invent Xueqiu posts, Guba threads, or filings that are not in the data.
+
+## Data sources (pre-fetched, in this prompt)
+
+### Company news, filings, and domestic/overseas headlines
+Institutional and official framing. Weight exchange filings and regulator language over tabloid headlines.
+
+<start_of_news>
+{news_block}
+<end_of_news>
+
+### A-share retail and interaction — Xueqiu, East Money Guba posts / 人气榜 / 千股千评, SSE e-interaction
+Fast-moving domestic retail signal. Xueqiu is closer to informed retail when a cookie is set. East Money Guba posts are the public thread titles and bodies; the keyword count under that section is a tally of those posts, not a poll. Popularity rank and 千股千评 are scores, not posts. e-interaction (e互动) is company replies to investor questions.
+
+<start_of_ashare_retail>
+{retail_block}
+<end_of_ashare_retail>
+
+## How to analyze this data
+
+1. Treat official filings and CSRC/PBOC/CCTV policy items as events; treat Xueqiu and Guba posts as opinion.
+2. Heat / 千股千评 rows are this ticker only when the data names this six-digit code. Do not use other listings' heat scores. Do not turn those scores into a bull/bear post ratio.
+3. If the Xueqiu cookie note is present, do not invent Xueqiu posts. When East Money Guba posts and their keyword count are present, that count is the retail bull/bear support. Do not call post-level sentiment missing only because Xueqiu is empty.
+4. If retail sources returned an "<unavailable>" placeholder, set confidence to low and do not fabricate posts.
+5. Look for divergences: bullish Guba posts vs cautious filings (or the reverse) is itself a signal.
+6. Identify recurring narrative themes, catalysts, and risks.
+7. Past sentiment is not a price call.
+
+## Output fields
+
+- **overall_band**: Exactly one of Bullish / Mildly Bullish / Neutral / Mixed / Mildly Bearish / Bearish.
+- **overall_score**: 0 (bearish) to 10 (bullish); 5 is neutral.
+- **confidence**: low / medium / high, based on sample size and whether sources actually returned data.
+- **narrative**: Source-by-source breakdown plus a markdown table of key signals.
 
 {get_language_instruction()}"""
 

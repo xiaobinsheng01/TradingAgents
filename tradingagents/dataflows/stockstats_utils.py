@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+from io import StringIO
 from typing import Annotated
 
 import pandas as pd
@@ -9,7 +10,7 @@ from stockstats import wrap
 from yfinance.exceptions import YFRateLimitError
 
 from .config import get_config
-from .symbol_utils import NoMarketDataError, normalize_symbol
+from .symbol_utils import NoMarketDataError, a_share_code, normalize_symbol
 from .utils import safe_ticker_component
 
 logger = logging.getLogger(__name__)
@@ -184,10 +185,79 @@ def _needs_same_day_refresh(data_file, curr_date_dt, today_date) -> bool:
 def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     """Fetch OHLCV data with caching, filtered to prevent look-ahead bias.
 
-    Downloads 5 years of data up to today and caches per symbol. On
-    subsequent calls the cache is reused. Rows after curr_date are
-    filtered out so backtests never see future prices.
+    A-shares use the same AKTools daily path as ``get_stock_data`` (East Money,
+    then Tencent/Sina). Other listings download 5 years of Yahoo data. Rows
+    after curr_date are filtered out so backtests never see future prices.
     """
+    if a_share_code(symbol) is not None:
+        return _load_ohlcv_akshare(symbol, curr_date)
+    return _load_ohlcv_yahoo(symbol, curr_date)
+
+
+def _cached_ohlcv_frame(data_file: str, curr_date_dt, today_date) -> pd.DataFrame | None:
+    if not os.path.exists(data_file):
+        return None
+    cached = pd.read_csv(data_file, on_bad_lines="skip", encoding="utf-8")
+    if (
+        not cached.empty
+        and "Close" in cached.columns
+        and not _needs_same_day_refresh(data_file, curr_date_dt, today_date)
+    ):
+        return cached
+    return None
+
+
+def _finalize_ohlcv(
+    data: pd.DataFrame, symbol: str, canonical: str, curr_date: str, curr_date_dt
+) -> pd.DataFrame:
+    data = _clean_dataframe(data)
+    data = data[data["Date"] <= curr_date_dt]
+    if not data.empty and pd.isna(data["Close"].iloc[-1]):
+        raise NoMarketDataError(
+            symbol, canonical, "latest in-range OHLCV bar has no closing price"
+        )
+    data = _fill_price_gaps(data)
+    _assert_ohlcv_not_stale(data, curr_date, symbol, canonical)
+    return data
+
+
+def _load_ohlcv_akshare(symbol: str, curr_date: str) -> pd.DataFrame:
+    """Same daily bars as ``get_akshare_stock_data`` (vendor chain for A-shares)."""
+    from .akshare_market import get_akshare_stock_data
+    from .akshare_news import AkshareNotConfiguredError
+
+    code = a_share_code(symbol) or symbol
+    safe_symbol = safe_ticker_component(code)
+    config = get_config()
+    curr_date_dt = pd.to_datetime(curr_date).normalize()
+    today_date = pd.Timestamp.today()
+    start_str = (curr_date_dt - pd.DateOffset(years=5)).strftime("%Y-%m-%d")
+    end_str = curr_date_dt.strftime("%Y-%m-%d")
+
+    os.makedirs(config["data_cache_dir"], exist_ok=True)
+    data_file = os.path.join(
+        config["data_cache_dir"],
+        f"{safe_symbol}-AK-data-{start_str}-{end_str}.csv",
+    )
+    data = _cached_ohlcv_frame(data_file, curr_date_dt, today_date)
+    if data is None:
+        try:
+            raw = get_akshare_stock_data(symbol, start_str, end_str)
+        except AkshareNotConfiguredError as e:
+            raise NoMarketDataError(
+                symbol, code, "akshare is not configured for A-share OHLCV"
+            ) from e
+        downloaded = pd.read_csv(StringIO(raw), comment="#")
+        downloaded = _ensure_date_column(downloaded)
+        if downloaded.empty or "Close" not in downloaded.columns:
+            raise NoMarketDataError(symbol, code, "akshare returned no OHLCV rows")
+        downloaded.to_csv(data_file, index=False, encoding="utf-8")
+        data = downloaded
+    return _finalize_ohlcv(data, symbol, code, curr_date, curr_date_dt)
+
+
+def _load_ohlcv_yahoo(symbol: str, curr_date: str) -> pd.DataFrame:
+    """Fetch Yahoo OHLCV with caching, filtered to prevent look-ahead bias."""
     # Resolve broker/forex symbols (XAUUSD+ -> GC=F) to Yahoo's convention,
     # then reject values that would escape the cache directory when
     # interpolated into the cache filename (e.g. ``../../tmp/x``).
@@ -212,21 +282,7 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
         f"{safe_symbol}-YFin-data-{start_str}-{end_str}.csv",
     )
 
-    # A cached file may be empty if a prior fetch failed (unknown symbol,
-    # transient rate limit). Treat an empty/columnless cache as a miss and
-    # re-fetch rather than serving the poisoned file forever.
-    data = None
-    if os.path.exists(data_file):
-        cached = pd.read_csv(data_file, on_bad_lines="skip", encoding="utf-8")
-        # Serve the cache only when it is usable and not a stale snapshot of the
-        # day being requested (#1150); otherwise fall through and refetch.
-        if (
-            not cached.empty
-            and "Close" in cached.columns
-            and not _needs_same_day_refresh(data_file, curr_date_dt, today_date)
-        ):
-            data = cached
-
+    data = _cached_ohlcv_frame(data_file, curr_date_dt, today_date)
     if data is None:
         downloaded = yf_retry(lambda: yf.download(
             canonical,
@@ -245,27 +301,7 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
         downloaded.to_csv(data_file, index=False, encoding="utf-8")
         data = downloaded
 
-    data = _clean_dataframe(data)
-
-    # Filter to curr_date to prevent look-ahead bias in backtesting.
-    data = data[data["Date"] <= curr_date_dt]
-
-    # Guard the latest in-range bar before dropping incomplete rows: a newest bar
-    # with no close is "not settled yet", not "does not exist". Silently dropping
-    # it would make the previous trading day look like the latest (#1201); raise
-    # instead so the router surfaces it rather than fabricating a fallback.
-    if not data.empty and pd.isna(data["Close"].iloc[-1]):
-        raise NoMarketDataError(
-            symbol, canonical, "latest in-range OHLCV bar has no closing price"
-        )
-
-    data = _fill_price_gaps(data)
-
-    # Reject a stale frame (latest row far older than curr_date) rather than
-    # feeding year-old prices into indicators (#1021).
-    _assert_ohlcv_not_stale(data, curr_date, symbol, canonical)
-
-    return data
+    return _finalize_ohlcv(data, symbol, canonical, curr_date, curr_date_dt)
 
 
 def filter_financials_by_date(data: pd.DataFrame, curr_date: str) -> pd.DataFrame:

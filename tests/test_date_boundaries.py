@@ -10,6 +10,7 @@ import pytest
 import tradingagents.dataflows.stockstats_utils as su
 import tradingagents.dataflows.y_finance as yfin
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.symbol_utils import NoMarketDataError
 
 
 @pytest.mark.unit
@@ -37,6 +38,42 @@ def test_get_yfin_requests_inclusive_end(monkeypatch):
     assert captured["end"] == "2025-05-10"
     # Header still reflects the requested range, not the internal +1 day.
     assert "to 2025-05-09" in out
+
+
+@pytest.mark.unit
+def test_get_yfin_skips_a_share_without_yahoo(monkeypatch):
+    monkeypatch.setattr(
+        yfin.yf,
+        "Ticker",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("Yahoo must not run")),
+    )
+    with pytest.raises(NoMarketDataError, match="A-share"):
+        yfin.get_YFin_data_online("601061.SH", "2025-05-01", "2025-05-09")
+
+
+@pytest.mark.unit
+def test_load_ohlcv_uses_akshare_for_a_share(monkeypatch, tmp_path):
+    set_config({"data_cache_dir": str(tmp_path)})
+    csv = (
+        "# Stock data for 601061 from 2021-05-09 to 2026-05-09\n"
+        "# Total records: 2\n"
+        "# Source: akshare/AKTools\n\n"
+        "Date,Open,High,Low,Close,Adj Close,Volume\n"
+        "2026-05-08,10.0,11.0,9.5,10.5,10.5,1000\n"
+        "2026-05-09,10.5,11.2,10.2,11.0,11.0,1200\n"
+    )
+    monkeypatch.setattr(
+        "tradingagents.dataflows.akshare_market.get_akshare_stock_data",
+        lambda *a, **k: csv,
+    )
+
+    def boom(*_a, **_k):
+        raise AssertionError("Yahoo must not run for A-share OHLCV")
+
+    monkeypatch.setattr(su.yf, "download", boom)
+    data = su.load_ohlcv("601061.SH", "2026-05-09")
+    assert float(data.iloc[-1]["Close"]) == 11.0
+    assert "AK-data" in str(list(tmp_path.iterdir())[0])
 
 
 @pytest.mark.unit

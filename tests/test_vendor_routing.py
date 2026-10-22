@@ -118,6 +118,70 @@ class VendorRoutingTests(unittest.TestCase):
                 self.assertRaises(ValueError):
             interface.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
 
+    def test_news_methods_concatenate_configured_vendors(self):
+        set_config({"data_vendors": {"news_data": "akshare,yfinance"}})
+        av = mock.Mock(side_effect=_returns("AV_NEWS"))
+        with self._route_method(
+            "get_news",
+            {
+                "akshare": _returns("CN_NEWS"),
+                "yfinance": _returns("YF_NEWS"),
+                "alpha_vantage": av,
+            },
+        ):
+            result = interface.route_to_vendor(
+                "get_news", "600519.SS", "2026-01-01", "2026-01-10"
+            )
+        self.assertIn("CN_NEWS", result)
+        self.assertIn("YF_NEWS", result)
+        self.assertIn("Source: akshare", result)
+        self.assertIn("Source: yfinance", result)
+        av.assert_not_called()
+
+    def test_news_aggregate_skips_no_data_and_keeps_other_vendor(self):
+        set_config({"data_vendors": {"news_data": "akshare,yfinance"}})
+        with self._route_method(
+            "get_news",
+            {"akshare": _no_data, "yfinance": _returns("YF_NEWS")},
+        ):
+            result = interface.route_to_vendor(
+                "get_news", "AAPL", "2026-01-01", "2026-01-10"
+            )
+        self.assertIn("YF_NEWS", result)
+        self.assertIn("Source: yfinance", result)
+        self.assertNotIn("Source: akshare", result)
+
+    def test_default_global_news_chain_uses_google_not_yfinance(self):
+        yf = mock.Mock(side_effect=_returns("YF_GLOBAL"))
+        with self._route_method(
+            "get_global_news",
+            {
+                "akshare": _returns("CN_GLOBAL"),
+                "google": _returns("GOOG_GLOBAL"),
+                "yfinance": yf,
+            },
+        ):
+            result = interface.route_to_vendor("get_global_news", "2026-09-08", 7, 10)
+        self.assertIn("CN_GLOBAL", result)
+        self.assertIn("GOOG_GLOBAL", result)
+        self.assertIn("Source: google", result)
+        self.assertNotIn("YF_GLOBAL", result)
+        yf.assert_not_called()
+
+
+    def test_default_chain_skips_akshare_for_us_ticker(self):
+        set_config({"data_vendors": {"core_stock_apis": "akshare,yfinance"}})
+        with self._route(
+            {
+                "akshare": _no_data,
+                "yfinance": _returns("YF_DATA"),
+            }
+        ):
+            result = interface.route_to_vendor(
+                "get_stock_data", "AAPL", "2026-01-01", "2026-01-10"
+            )
+        self.assertEqual(result, "YF_DATA")
+
 
 if __name__ == "__main__":
     unittest.main()

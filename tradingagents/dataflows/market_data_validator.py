@@ -92,6 +92,7 @@ def build_verified_market_snapshot(
         f"- Requested analysis date: {curr_date}",
         f"- Latest trading row used: {latest_date}",
         "- Rows after the requested analysis date are excluded before verification.",
+        "- OHLCV source matches get_stock_data for this ticker (AKTools for A-shares).",
         "",
         "### Latest verified OHLCV row",
         "",

@@ -58,6 +58,22 @@ _QWEN_MODELS: dict[str, list[ModelOption]] = {
 }
 
 
+# Doubao via Volcengine Ark (China OpenAI-compatible endpoint).
+# Catalog aliases are the Seed 2.1 generation names. Dated snapshots
+# (doubao-seed-2-1-pro-YYMMDD) and Ark inference endpoint IDs (ep-...) are
+# entered via "Custom model ID".
+_DOUBAO_MODELS: dict[str, list[ModelOption]] = {
+    "quick": [
+        ("Doubao Seed 2.1 Turbo - Fast, half Pro cost, 256K ctx", "doubao-seed-2.1-turbo"),
+        ("Custom model ID", "custom"),
+    ],
+    "deep": [
+        ("Doubao Seed 2.1 Pro - Flagship agent/coding, 256K ctx", "doubao-seed-2.1-pro"),
+        ("Custom model ID", "custom"),
+    ],
+}
+
+
 # Shared model list for MiniMax's global and CN endpoints (same IDs).
 # Full official lineup per platform.minimax.io/docs/api-reference/text-openai-api.
 # M3 carries a 1M-token context window; the M2.x line is 204,800 tokens.
@@ -126,6 +142,7 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Grok 4.20 Multi-Agent - Multi-agent reasoning", "grok-4.20-multi-agent-0309"),
         ],
     },
+    "doubao": _DOUBAO_MODELS,
     # DeepSeek: the deepseek-chat / deepseek-reasoner aliases are deprecated
     # (2026-07-24) and now map to V4 Flash; expose the V4 IDs directly. V4 Flash
     # serves both non-thinking and thinking modes (the DeepSeekChatOpenAI client

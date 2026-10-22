@@ -8,6 +8,9 @@ from .model_catalog import get_known_models
 _ANY_MODEL_PROVIDERS = (
     "ollama", "openrouter", "openai_compatible",
     "mistral", "kimi", "groq", "nvidia", "bedrock",
+    # Ark production traffic often uses inference endpoint IDs (ep-...), not
+    # the catalog aliases, so any model string is accepted.
+    "doubao",
 )
 
 VALID_MODELS = {
@@ -20,7 +23,8 @@ VALID_MODELS = {
 def validate_model(provider: str, model: str) -> bool:
     """Check if model name is valid for the given provider.
 
-    For ollama, openrouter, and openai_compatible - any model is accepted.
+    For ollama, openrouter, openai_compatible, doubao, and other
+    user-specified-ID providers, any model is accepted.
     """
     provider_lower = provider.lower()
 

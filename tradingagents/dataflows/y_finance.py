@@ -12,7 +12,7 @@ from .stockstats_utils import (
     load_ohlcv,
     yf_retry,
 )
-from .symbol_utils import NoMarketDataError, normalize_symbol
+from .symbol_utils import NoMarketDataError, normalize_symbol, raise_if_a_share_yahoo
 
 
 def get_YFin_data_online(
@@ -23,6 +23,7 @@ def get_YFin_data_online(
 
     datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    raise_if_a_share_yahoo(symbol, "OHLCV")
 
     # Resolve broker/forex symbols to Yahoo's convention (XAUUSD+ -> GC=F).
     canonical = normalize_symbol(symbol)
@@ -77,6 +78,7 @@ def get_stock_stats_indicators_window(
     ],
     look_back_days: Annotated[int, "how many days to look back"],
 ) -> str:
+    raise_if_a_share_yahoo(symbol, "indicators")
 
     best_ind_params = {
         # Moving Averages
@@ -276,6 +278,7 @@ def get_fundamentals(
     curr_date: Annotated[str, "current date (not used for yfinance)"] = None
 ):
     """Get company fundamentals overview from yfinance."""
+    raise_if_a_share_yahoo(ticker, "fundamentals")
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)
@@ -344,6 +347,7 @@ def get_balance_sheet(
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None
 ):
     """Get balance sheet data from yfinance."""
+    raise_if_a_share_yahoo(ticker, "balance sheet")
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)
@@ -379,6 +383,7 @@ def get_cashflow(
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None
 ):
     """Get cash flow data from yfinance."""
+    raise_if_a_share_yahoo(ticker, "cash flow")
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)
@@ -414,6 +419,7 @@ def get_income_statement(
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None
 ):
     """Get income statement data from yfinance."""
+    raise_if_a_share_yahoo(ticker, "income statement")
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)
@@ -444,9 +450,11 @@ def get_income_statement(
 
 
 def get_insider_transactions(
-    ticker: Annotated[str, "ticker symbol of the company"]
+    ticker: Annotated[str, "ticker symbol of the company"],
+    curr_date: str | None = None,
 ):
     """Get insider transactions data from yfinance."""
+    raise_if_a_share_yahoo(ticker, "insider transactions")
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)

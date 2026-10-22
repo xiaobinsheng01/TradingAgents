@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TradingAgents 本机操作台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <p class="eyebrow">Local console · 127.0.0.1</p>
+        <div class="brand-row">
+          <h1>TradingAgents 本机操作台</h1>
+          <p class="legend" aria-label="涨跌颜色"><span class="up">红涨</span><span class="down">绿跌</span></p>
+        </div>
+        <p class="lede">
+          研究评级，永不下单。密钥只读本机 <code>.env</code>，不会出现在页面或接口响应里。
+        </p>
+      </div>
+    </header>
+
+    <nav class="view-tabs" aria-label="操作台视图">
+      <button type="button" id="view-full" class="view-tab active" data-view="full">全图分析</button>
+      <button type="button" id="view-tape" class="view-tab" data-view="tape">价量 Tape</button>
+      <button type="button" id="view-screen" class="view-tab" data-view="screen">大盘筛选</button>
+      <button type="button" id="view-index" class="view-tab" data-view="index">大盘走势</button>
+      <button type="button" id="view-trend" class="view-tab" data-view="trend">趋势预测</button>
+      <button type="button" id="view-tomorrow-rise" class="view-tab" data-view="tomorrow-rise">明日上涨</button>
+    </nav>
+
+    <section id="screen-view" class="screen-view hidden">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>沪深主板筛选</h2>
+          <div class="panel-actions">
+            <button type="button" id="screen-open-full" class="btn-secondary" disabled>带入全图分析</button>
+            <button type="button" id="screen-btn" class="btn-secondary">扫描涨幅与涨速</button>
+          </div>
+        </div>
+        <p class="hint">
+          只看沪深主板的涨幅榜、涨速榜和板块领涨。创业板、科创板、北交所不进这张表。
+          点表格中的一行看日K和成交量，再点「带入全图分析」。席位净买或净卖来自龙虎买卖，不是融券做空；减持不是清盘。
+          研究评级，永不下单。
+        </p>
+        <p id="screen-summary" class="hint quote-strip"></p>
+        <p id="screen-error" class="error" hidden></p>
+        <div class="table-wrap">
+          <table id="screen-table" class="screen-table">
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>名称</th>
+                <th>来源</th>
+                <th>板块</th>
+                <th class="num">涨跌幅</th>
+                <th class="num">涨速</th>
+                <th class="num">5分钟</th>
+                <th class="num">换手</th>
+                <th class="num">量比</th>
+                <th class="num">成交额</th>
+                <th class="num">振幅</th>
+                <th class="num">流通市值</th>
+                <th>立场</th>
+                <th class="num">净买入</th>
+                <th>买一席</th>
+                <th>卖一席</th>
+                <th>席位</th>
+                <th>增减持</th>
+                <th>融资</th>
+                <th>融券</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="screen-chart-panel">
+          <div class="panel-head">
+            <h2 id="screen-chart-title">日K</h2>
+          </div>
+          <p id="screen-chart-note" class="hint">点表格中的一只主板股票，查看最近日K。图只用于观察，不会下单。</p>
+          <div id="screen-chart" class="screen-chart"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="index-view" class="screen-view hidden">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>A股大盘走势</h2>
+          <div class="panel-actions">
+            <button type="button" id="index-btn" class="btn-secondary">读取大盘走势</button>
+          </div>
+        </div>
+        <p class="hint">
+          看上证指数、深证成指、创业板指、沪深300、上证50、中证500和科创50的当天日线。
+          次日和 5–20 日是研究立场，用两市成交、涨跌停家数和沪深300相对银行的容错来定，不自动跑全图。
+          点一行看该指数日K。研究评级，永不下单。
+        </p>
+        <p id="index-summary" class="hint quote-strip"></p>
+        <p id="index-error" class="error" hidden></p>
+        <div class="table-wrap">
+          <table id="index-table" class="screen-table">
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>名称</th>
+                <th class="num">收盘</th>
+                <th class="num">1日%</th>
+                <th class="num">5日%</th>
+                <th class="num">20日%</th>
+                <th class="num">区间位置</th>
+                <th>结构</th>
+                <th>次日</th>
+                <th>5–20日</th>
+                <th class="num">成交额</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="screen-chart-panel">
+          <div class="panel-head">
+            <h2 id="index-chart-title">日K</h2>
+          </div>
+          <p id="index-chart-note" class="hint">点表格中的一条指数，查看最近日K。图只用于观察，不会下单。</p>
+          <div id="index-chart" class="screen-chart"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tomorrow-rise-view" class="screen-view hidden">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>明日上涨（排除创业板）</h2>
+          <div class="panel-actions">
+            <button type="button" id="tomorrow-rise-open-full" class="btn-secondary" disabled>带入全图分析</button>
+            <button type="button" id="tomorrow-rise-btn" class="btn-secondary">扫描 T+1 偏多</button>
+          </div>
+        </div>
+        <p class="hint">
+          从当天涨幅、涨速与板块领涨观察区扫描，用 T+1 打法筛出次日偏多（BUY）名单。创业板不进表；
+          科创板与北交所在表内。研究评级，永不下单。
+        </p>
+        <p id="tomorrow-rise-summary" class="hint quote-strip"></p>
+        <p id="tomorrow-rise-error" class="error" hidden></p>
+        <div class="table-wrap">
+          <table id="tomorrow-rise-table" class="screen-table">
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>名称</th>
+                <th>来源</th>
+                <th>板块</th>
+                <th class="num">涨幅%</th>
+                <th class="num">涨速%</th>
+                <th>板型 / T+1</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="screen-chart-panel">
+          <div class="panel-head">
+            <h2 id="tomorrow-rise-chart-title">日K</h2>
+          </div>
+          <p id="tomorrow-rise-chart-note" class="hint">点表格中的一只股票查看最近日K。创业板不进日K。</p>
+          <div id="tomorrow-rise-chart" class="screen-chart"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="trend-view" class="screen-view hidden">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>股票趋势预测</h2>
+          <div class="panel-actions">
+            <button type="button" id="trend-btn" class="btn-secondary">读取趋势预测</button>
+          </div>
+        </div>
+        <p class="hint">
+          输入多只 A 股代码（逗号、空格或换行分隔）。按所选价量窗口读取收盘价、窗口涨跌、相对沪深300、
+          区间位置与缠论结构，给出后续走势研究立场。创业板不参与；不跑全图、不调用 LLM、永不下单。
+        </p>
+        <label>
+          股票代码
+          <textarea
+            id="trend_tickers"
+            rows="4"
+            placeholder="002487.SZ&#10;002081.SZ&#10;000725.SZ"
+          ></textarea>
+        </label>
+        <label>
+          价量窗口
+          <select id="trend_swing_window" name="trend_swing_window"></select>
+        </label>
+        <label>
+          日期（默认今天）
+          <input id="trend_as_of" name="trend_as_of" type="date" />
+        </label>
+        <p id="trend-summary" class="hint quote-strip"></p>
+        <p id="trend-error" class="error" hidden></p>
+        <div class="table-wrap">
+          <table id="trend-table" class="screen-table">
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>名称</th>
+                <th class="num">收盘</th>
+                <th class="num">窗口%</th>
+                <th class="num">5日%</th>
+                <th class="num">10日%</th>
+                <th class="num">相对300</th>
+                <th class="num">区间位置</th>
+                <th>结构</th>
+                <th>趋势</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <main id="console-layout" class="layout">
+      <form id="run-form" class="panel">
+        <h2>运行参数</h2>
+
+        <label>
+          标的
+          <input id="ticker" name="ticker" required placeholder="600519.SS" autocomplete="off" />
+        </label>
+
+        <label>
+          分析日期
+          <input id="analysis_date" name="analysis_date" type="date" required />
+        </label>
+
+        <label>
+          价量窗口
+          <select id="swing_tape_window" name="swing_tape_window"></select>
+        </label>
+        <p id="tape-hint" class="hint hidden">
+          近半个月、近3个月或近半年的股价、成交量、换手，缠论分型/笔/段/中枢，窗口内新闻/公告，以及披露的增减持 / 龙虎 / 大宗。用来研究后续走势；研究评级，永不下单。
+        </p>
+
+        <label>
+          输出语言
+          <select id="output_language" name="output_language"></select>
+        </label>
+
+        <fieldset>
+          <legend>分析师</legend>
+          <div id="analysts" class="checks"></div>
+        </fieldset>
+
+        <label>
+          研究深度
+          <select id="research_depth" name="research_depth"></select>
+        </label>
+
+        <label>
+          LLM 供应商
+          <select id="llm_provider" name="llm_provider"></select>
+        </label>
+        <p id="key-status" class="hint"></p>
+
+        <label>
+          Quick 模型
+          <select id="shallow_thinker" name="shallow_thinker"></select>
+        </label>
+        <label id="shallow-custom-wrap" class="hidden">
+          Quick 自定义 ID
+          <input id="shallow_custom" placeholder="ep-... 或模型 ID" />
+        </label>
+
+        <label>
+          Deep 模型
+          <select id="deep_thinker" name="deep_thinker"></select>
+        </label>
+        <label id="deep-custom-wrap" class="hidden">
+          Deep 自定义 ID
+          <input id="deep_custom" placeholder="ep-... 或模型 ID" />
+        </label>
+
+        <label>
+          Backend URL（可选）
+          <input id="backend_url" name="backend_url" placeholder="https://..." />
+        </label>
+
+        <label id="google-wrap" class="hidden">
+          Gemini thinking
+          <select id="google_thinking_level">
+            <option value="">默认</option>
+            <option value="high">high</option>
+            <option value="minimal">minimal</option>
+          </select>
+        </label>
+        <label id="openai-wrap" class="hidden">
+          OpenAI reasoning effort
+          <select id="openai_reasoning_effort">
+            <option value="">默认</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="low">low</option>
+          </select>
+        </label>
+        <label id="anthropic-wrap" class="hidden">
+          Anthropic effort
+          <select id="anthropic_effort">
+            <option value="">默认</option>
+            <option value="high">high</option>
+            <option value="medium">medium</option>
+            <option value="low">low</option>
+          </select>
+        </label>
+
+        <label class="check">
+          <input id="checkpoint" type="checkbox" />
+          启用 checkpoint 续跑
+        </label>
+        <label class="check">
+          <input id="ingest_news" type="checkbox" checked />
+          A 股先 ingest-news（一次性拉仓库，不是后台 worker）
+        </label>
+
+        <button type="submit" id="run-btn">开始分析</button>
+        <p id="form-error" class="error" hidden></p>
+      </form>
+
+      <section class="panel">
+        <h2>进度</h2>
+        <p id="notice" class="hint"></p>
+        <p id="stats" class="hint"></p>
+        <ul id="agents" class="agents"></ul>
+        <ol id="log" class="log"></ol>
+      </section>
+
+      <section class="panel reports">
+        <div class="panel-head">
+          <h2>报告</h2>
+          <button type="button" id="latest-btn" class="btn-secondary">查询最近一次分析</button>
+        </div>
+        <p id="decision" class="decision"></p>
+        <nav id="report-tabs" class="tabs"></nav>
+        <article id="report-body" class="markdown"><p class="hint">运行结束后在这里查看各段报告。也可点「查询最近一次分析」读已落盘的最近一次结果。</p></article>
+      </section>
+    </main>
+    <script src="/static/lightweight-charts.standalone.production.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

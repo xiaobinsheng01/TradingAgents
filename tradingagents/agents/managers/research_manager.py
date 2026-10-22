@@ -7,6 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
 )
+from tradingagents.agents.utils.rating import T1_BIAS_INSTRUCTION, enforce_t1_bias
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
@@ -20,6 +21,7 @@ def create_research_manager(llm):
     def research_manager_node(state) -> dict:
         instrument_context = get_instrument_context_from_state(state)
         history = state["investment_debate_state"].get("history", "")
+        market_report = (state.get("market_report") or "").strip()
 
         investment_debate_state = state["investment_debate_state"]
 
@@ -40,17 +42,24 @@ Commit to a directional stance only when the debate's strongest arguments clearl
 
 ---
 
+**Market report:**
+{market_report or "(none)"}
+
 **Debate History:**
 {history}
 
+{T1_BIAS_INSTRUCTION}
 {NO_EXTERNAL_TOOLS}""" + get_language_instruction()
 
-        investment_plan = invoke_structured_or_freetext(
-            structured_llm,
-            llm,
-            prompt,
-            render_research_plan,
-            "Research Manager",
+        investment_plan = enforce_t1_bias(
+            invoke_structured_or_freetext(
+                structured_llm,
+                llm,
+                prompt,
+                render_research_plan,
+                "Research Manager",
+            ),
+            market_report,
         )
 
         new_investment_debate_state = {

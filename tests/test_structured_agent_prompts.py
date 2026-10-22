@@ -131,6 +131,35 @@ def test_sentiment_prompt_states_constraint(monkeypatch):
 
 
 @pytest.mark.unit
+def test_sentiment_prompt_uses_ashare_retail_for_mainland_tickers(monkeypatch):
+    from tradingagents.agents.schemas import SentimentBand, SentimentReport
+
+    monkeypatch.setattr(sentiment, "fetch_a_share_sentiment", lambda *a, **k: "xq-guba")
+    monkeypatch.setattr(sentiment.get_news, "func", lambda *a, **k: "cn-news", raising=False)
+    stocktwits = MagicMock(return_value="SHOULD_NOT_RUN")
+    reddit = MagicMock(return_value="SHOULD_NOT_RUN")
+    monkeypatch.setattr(sentiment, "fetch_stocktwits_messages", stocktwits)
+    monkeypatch.setattr(sentiment, "fetch_reddit_posts", reddit)
+
+    captured = {}
+    llm = _capturing_llm(captured, SentimentReport(
+        overall_band=SentimentBand.BULLISH, overall_score=7.5,
+        confidence="high", narrative="n",
+    ))
+    sentiment.create_sentiment_analyst(llm)({
+        "company_of_interest": "600519.SS", "trade_date": "2026-01-15",
+        "asset_type": "stock", "messages": [],
+    })
+    text = _prompt_text(captured["prompt"])
+    assert "Xueqiu" in text
+    assert "xq-guba" in text
+    assert "six-digit code" in text
+    assert "StockTwits" not in text
+    stocktwits.assert_not_called()
+    reddit.assert_not_called()
+
+
+@pytest.mark.unit
 def test_tool_using_analysts_keep_their_date_guidance():
     # The analysts that really do call tools keep the wording that anchors their
     # tool date ranges (#836) — this fix is scoped to no-tool agents.
@@ -146,3 +175,32 @@ def test_constraint_text_is_unambiguous():
     # No template braces: it is embedded in ChatPromptTemplate strings, where
     # braces would be parsed as input variables.
     assert "{" not in NO_EXTERNAL_TOOLS and "}" not in NO_EXTERNAL_TOOLS
+
+
+@pytest.mark.unit
+def test_debate_prompts_label_news_as_ticker_report():
+    from tradingagents.agents.researchers import bear_researcher, bull_researcher
+    from tradingagents.agents.risk_mgmt import (
+        aggressive_debator,
+        conservative_debator,
+        neutral_debator,
+    )
+
+    for module in (
+        bull_researcher,
+        bear_researcher,
+        aggressive_debator,
+        conservative_debator,
+        neutral_debator,
+    ):
+        src = inspect.getsource(module)
+        assert "world affairs" not in src.lower()
+        assert "Company/ticker news report" in src
+
+
+@pytest.mark.unit
+def test_trader_prompt_does_not_invent_prices_without_market_report():
+    import tradingagents.agents.trader.trader as trader
+
+    src = inspect.getsource(trader)
+    assert "do not invent entry" in src

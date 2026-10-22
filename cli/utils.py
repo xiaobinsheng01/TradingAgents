@@ -1,3 +1,4 @@
+import datetime
 import os
 from pathlib import Path
 
@@ -63,17 +64,16 @@ def get_ticker() -> str:
 
 
 def normalize_ticker_symbol(ticker: str) -> str:
-    """Resolve user input to its canonical Yahoo symbol (single source of truth).
+    """Resolve user input for the graph. A-share ``.SH`` stays ``.SH``.
 
-    Delegates to the data layer's ``normalize_symbol`` so the symbol the CLI
-    passes through the pipeline is exactly the one the data path will price
-    (e.g. ``BTCUSD`` -> ``BTC-USD``, ``XAUUSD`` -> ``GC=F``). Falls back to the
-    plain upper-case if the data layer is unavailable.
+    Crypto/forex/metal aliases still match the data path (``BTCUSD`` →
+    ``BTC-USD``). Yahoo's Shanghai ``.SS`` is applied only inside
+    ``normalize_symbol`` when a vendor actually queries Yahoo.
     """
     try:
-        from tradingagents.dataflows.symbol_utils import normalize_symbol
+        from tradingagents.dataflows.symbol_utils import run_ticker_symbol
 
-        return normalize_symbol(ticker)
+        return run_ticker_symbol(ticker)
     except Exception:
         return ticker.strip().upper()
 
@@ -85,6 +85,49 @@ def detect_asset_type(ticker: str) -> AssetType:
     if canonical.endswith(CRYPTO_SUFFIXES):
         return AssetType.CRYPTO
     return AssetType.STOCK
+
+
+def build_live_predict_selections(
+    ticker: str,
+    analysis_date: str | None = None,
+    output_language: str = "Chinese",
+) -> dict:
+    """Non-interactive selections for on-demand live prediction.
+
+    Skips Fundamentals (PE/three statements are not next-session features).
+    Does not place orders. Date defaults to local today.
+    """
+    from tradingagents.default_config import DEFAULT_CONFIG
+
+    selected = normalize_ticker_symbol(ticker)
+    if not selected:
+        raise ValueError("ticker is required")
+    date_str = analysis_date or datetime.datetime.now().strftime("%Y-%m-%d")
+    try:
+        parsed = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError as e:
+        raise ValueError("analysis date must be YYYY-MM-DD") from e
+    if parsed.date() > datetime.datetime.now().date():
+        raise ValueError("analysis date cannot be in the future")
+
+    provider = str(DEFAULT_CONFIG["llm_provider"]).lower()
+    return {
+        "ticker": selected,
+        "asset_type": detect_asset_type(selected).value,
+        "analysis_date": date_str,
+        "analysts": [AnalystType.MARKET, AnalystType.SOCIAL, AnalystType.NEWS],
+        "research_depth": DEFAULT_CONFIG["max_debate_rounds"],
+        "llm_provider": provider,
+        "backend_url": resolve_backend_url(
+            provider, env_url=DEFAULT_CONFIG["backend_url"]
+        ),
+        "shallow_thinker": DEFAULT_CONFIG["quick_think_llm"],
+        "deep_thinker": DEFAULT_CONFIG["deep_think_llm"],
+        "google_thinking_level": DEFAULT_CONFIG["google_thinking_level"],
+        "openai_reasoning_effort": DEFAULT_CONFIG["openai_reasoning_effort"],
+        "anthropic_effort": DEFAULT_CONFIG["anthropic_effort"],
+        "output_language": output_language,
+    }
 
 
 def filter_analysts_for_asset_type(
@@ -164,15 +207,32 @@ def select_analysts(asset_type: AssetType = AssetType.STOCK) -> list[AnalystType
     return choices
 
 
+RESEARCH_DEPTH_OPTIONS: list[tuple[str, int]] = [
+    ("Shallow - Quick research, few debate and strategy discussion rounds", 1),
+    ("Medium - Middle ground, moderate debate rounds and strategy discussion", 3),
+    ("Deep - Comprehensive research, in depth debate and strategy discussion", 5),
+]
+
+OUTPUT_LANGUAGE_OPTIONS: list[tuple[str, str]] = [
+    ("Chinese (中文，默认)", "Chinese"),
+    ("English", "English"),
+    ("Japanese (日本語)", "Japanese"),
+    ("Korean (한국어)", "Korean"),
+    ("Hindi (हिन्दी)", "Hindi"),
+    ("Spanish (Español)", "Spanish"),
+    ("Portuguese (Português)", "Portuguese"),
+    ("French (Français)", "French"),
+    ("German (Deutsch)", "German"),
+    ("Arabic (العربية)", "Arabic"),
+    ("Russian (Русский)", "Russian"),
+    ("Custom language", "custom"),
+]
+
+
 def select_research_depth() -> int:
     """Select research depth using an interactive selection."""
 
-    # Define research depth options with their corresponding values
-    DEPTH_OPTIONS = [
-        ("Shallow - Quick research, few debate and strategy discussion rounds", 1),
-        ("Medium - Middle ground, moderate debate rounds and strategy discussion", 3),
-        ("Deep - Comprehensive research, in depth debate and strategy discussion", 5),
-    ]
+    DEPTH_OPTIONS = RESEARCH_DEPTH_OPTIONS
 
     choice = questionary.select(
         "Select Your [Research Depth]:",
@@ -351,6 +411,7 @@ def _llm_provider_table() -> list[tuple[str, str, str | None]]:
         ("Anthropic", "anthropic", "https://api.anthropic.com/"),
         ("xAI", "xai", "https://api.x.ai/v1"),
         ("DeepSeek", "deepseek", "https://api.deepseek.com"),
+        ("Doubao (Volcengine Ark)", "doubao", "https://ark.cn-beijing.volces.com/api/v3"),
         ("Qwen", "qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
         ("GLM", "glm", "https://open.bigmodel.cn/api/paas/v4/"),
         ("MiniMax", "minimax", "https://api.minimax.io/v1"),
@@ -655,18 +716,8 @@ def ask_output_language() -> str:
     choice = questionary.select(
         "Select Output Language:",
         choices=[
-            questionary.Choice("English (default)", "English"),
-            questionary.Choice("Chinese (中文)", "Chinese"),
-            questionary.Choice("Japanese (日本語)", "Japanese"),
-            questionary.Choice("Korean (한국어)", "Korean"),
-            questionary.Choice("Hindi (हिन्दी)", "Hindi"),
-            questionary.Choice("Spanish (Español)", "Spanish"),
-            questionary.Choice("Portuguese (Português)", "Portuguese"),
-            questionary.Choice("French (Français)", "French"),
-            questionary.Choice("German (Deutsch)", "German"),
-            questionary.Choice("Arabic (العربية)", "Arabic"),
-            questionary.Choice("Russian (Русский)", "Russian"),
-            questionary.Choice("Custom language", "custom"),
+            questionary.Choice(label, value)
+            for label, value in OUTPUT_LANGUAGE_OPTIONS
         ],
         style=questionary.Style([
             ("selected", "fg:yellow noinherit"),
@@ -675,14 +726,14 @@ def ask_output_language() -> str:
         ]),
     ).ask()
 
-    # Output language has a sensible default, so a cancel falls back to English
+    # Output language has a sensible default, so a cancel falls back to Chinese
     # rather than exiting the run (unlike the required model/provider prompts).
     if choice is None:
-        return "English"
+        return "Chinese"
     if choice == "custom":
         return (questionary.text(
             "Enter language name (e.g. Turkish, Vietnamese, Thai, Indonesian):",
             validate=lambda x: len(x.strip()) > 0 or "Please enter a language name.",
-        ).ask() or "").strip() or "English"
+        ).ask() or "").strip() or "Chinese"
 
     return choice

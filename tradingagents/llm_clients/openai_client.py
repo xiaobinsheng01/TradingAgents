@@ -213,6 +213,7 @@ OPENAI_COMPATIBLE_PROVIDERS: dict[str, ProviderSpec] = {
     "openai":     ProviderSpec(use_responses_api=True),
     "xai":        ProviderSpec(base_url="https://api.x.ai/v1"),
     "deepseek":   ProviderSpec(base_url="https://api.deepseek.com", chat_class=DeepSeekChatOpenAI),
+    "doubao":     ProviderSpec(base_url="https://ark.cn-beijing.volces.com/api/v3"),
     "qwen":       ProviderSpec(base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
     "qwen-cn":    ProviderSpec(base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"),
     "glm":        ProviderSpec(base_url="https://api.z.ai/api/paas/v4/"),

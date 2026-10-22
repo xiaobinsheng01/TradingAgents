@@ -6,10 +6,12 @@ the news path: a broker symbol like XAUUSD must resolve to the same Yahoo symbol
 hit the right instrument instead of failing/mismatching.
 """
 import pandas as pd
+import pytest
 
 import tradingagents.agents.utils.agent_utils as au
 import tradingagents.dataflows.yfinance_news as ynews
 import tradingagents.graph.trading_graph as tg
+from tradingagents.dataflows.symbol_utils import NoMarketDataError
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 
@@ -58,6 +60,36 @@ def test_fetch_returns_normalizes_symbol(monkeypatch):
     assert resolved == "2025-01-07"  # resolution date recorded (#1251)
 
 
+def test_fetch_returns_a_share_skips_yahoo(monkeypatch):
+    queried = []
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            queried.append(symbol)
+
+        def history(self, *args, **kwargs):
+            raise AssertionError("A-share returns must not hit Yahoo")
+
+    monkeypatch.setattr(tg.yf, "Ticker", FakeTicker)
+    monkeypatch.setattr(
+        "tradingagents.dataflows.akshare_market.realized_holding_returns",
+        lambda ticker, trade_date, holding_days, benchmark: (
+            0.02,
+            0.01,
+            holding_days,
+            "2026-01-12",
+        ),
+    )
+    raw, alpha, days, resolved = TradingAgentsGraph._fetch_returns(
+        None, "601061.SH", "2026-01-05", holding_days=5, benchmark="000001.SS"
+    )
+    assert queried == []
+    assert raw == pytest.approx(0.02)
+    assert alpha == pytest.approx(0.01)
+    assert days == 5
+    assert resolved == "2026-01-12"
+
+
 def test_news_lookup_normalizes_symbol(monkeypatch):
     seen = {}
 
@@ -76,3 +108,12 @@ def test_news_lookup_normalizes_symbol(monkeypatch):
     assert seen["symbol"] == "GC=F"   # news queried with the canonical symbol
     assert "XAUUSD" in out            # the user's ticker stays in the report
     assert "GC=F" in out              # provenance noted
+
+
+def test_news_lookup_skips_yahoo_for_a_share(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("yfinance must not be called for A-shares")
+
+    monkeypatch.setattr(ynews.yf, "Ticker", boom)
+    with pytest.raises(NoMarketDataError, match="A-share"):
+        ynews.get_news_yfinance("601061.SH", "2026-01-01", "2026-01-10")

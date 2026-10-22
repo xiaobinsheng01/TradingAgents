@@ -11,6 +11,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
 )
+from tradingagents.agents.utils.rating import T1_BIAS_INSTRUCTION, enforce_t1_bias
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
@@ -40,7 +41,10 @@ def create_trader(llm):
             )
             report_section = f"Technical Market Report:\n{market_report}\n\n"
         else:
-            grounding = ""
+            grounding = (
+                "The market analyst was not selected, so do not invent entry, stop-loss, "
+                "or current-price numbers; leave those fields as N/A. "
+            )
             report_section = ""
 
         messages = [
@@ -50,6 +54,7 @@ def create_trader(llm):
                     "You are a trading agent analyzing market data to make investment decisions. "
                     "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
                     + grounding
+                    + T1_BIAS_INSTRUCTION
                     + NO_EXTERNAL_TOOLS
                     + get_language_instruction()
                 ),
@@ -66,12 +71,15 @@ def create_trader(llm):
             },
         ]
 
-        trader_plan = invoke_structured_or_freetext(
-            structured_llm,
-            llm,
-            messages,
-            render_trader_proposal,
-            "Trader",
+        trader_plan = enforce_t1_bias(
+            invoke_structured_or_freetext(
+                structured_llm,
+                llm,
+                messages,
+                render_trader_proposal,
+                "Trader",
+            ),
+            market_report,
         )
 
         return {

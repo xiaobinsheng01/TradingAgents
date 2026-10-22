@@ -1,0 +1,7 @@
+---
+description: Python conventions for this repository
+globs: "**/*.py"
+alwaysApply: false
+---
+
+Read and follow `docs/agent-rules/language-conventions.md`.

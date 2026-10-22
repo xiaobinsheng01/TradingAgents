@@ -26,6 +26,8 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_GOOGLE_THINKING_LEVEL":   "google_thinking_level",
     "TRADINGAGENTS_OPENAI_REASONING_EFFORT": "openai_reasoning_effort",
     "TRADINGAGENTS_ANTHROPIC_EFFORT":        "anthropic_effort",
+    "TRADINGAGENTS_AKSHARE_BASE_URL":        "akshare_base_url",
+    "TRADINGAGENTS_SWING_TAPE_WINDOW":       "swing_tape_window",
 }
 
 
@@ -73,6 +75,17 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
     "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
     "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
+    # News/sentiment JSON under data_cache_dir/news/. Historical as-of dates
+    # are immutable; a live (today) snapshot refreshes after this many seconds.
+    "news_cache_ttl_seconds": 900,
+    # Live CLS / East Money / Sina / Tonghuashun / Futu flashes refresh faster than company news so
+    # an analyze run can see wires ingested minutes earlier. Historical as-of
+    # still ignores TTL. Not a 24h worker — pair with `tradingagents ingest-news`.
+    "news_telegraph_ttl_seconds": 120,
+    # Local AKTools HTTP (Docker). When set, A-share news/tape call
+    # ``{akshare_base_url}/api/public/<interface>`` and do not need the pip extra.
+    # AKSHARE_BASE_URL is accepted as an alias.
+    "akshare_base_url": None,
     "memory_log_path": os.getenv("TRADINGAGENTS_MEMORY_LOG_PATH", os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md")),
     # Optional cap on the number of resolved memory log entries. When set,
     # the oldest resolved entries are pruned once this limit is exceeded.
@@ -111,7 +124,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "checkpoint_enabled": False,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
-    "output_language": "English",
+    "output_language": "Chinese",
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
@@ -122,31 +135,49 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "news_article_limit": 20,             # max articles per ticker (ticker-news)
     "global_news_article_limit": 10,      # max articles for global/macro news
     "global_news_lookback_days": 7,       # macro news lookback window
-    # Search queries used by get_global_news for macro headlines. Extend or
-    # replace to broaden geographic / sector coverage.
+    # A-share swing tape window: half_month, three_months (90), or half_year (180).
+    "swing_tape_window": "half_month",
+    # Search queries used by get_global_news (Serper Google Search) for
+    # overseas headlines that can affect China A-shares. Extend or replace.
     "global_news_queries": [
-        "Federal Reserve interest rates inflation",
-        "S&P 500 earnings GDP economic outlook",
-        "geopolitical risk trade war sanctions",
-        "ECB Bank of England BOJ central bank policy",
-        "oil commodities supply chain energy",
+        "China A-share stock market CSI 300 overnight US futures",
+        "Federal Reserve interest rates inflation China yuan USD",
+        "copper lithium iron ore oil China commodities",
+        "geopolitical risk tariffs China trade",
+        "ECB BOJ central bank policy emerging markets",
+    ],
+    # Google site: filters for public overseas posts (not official X/Meta APIs).
+    "google_platform_queries": [
+        "China stocks OR A-shares OR CSI 300",
+    ],
+    "google_platform_sites": [
+        "x.com",
+        "twitter.com",
+        "youtube.com",
+        "facebook.com",
+        "instagram.com",
     ],
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
     # The configured value is the exact vendor chain — requests are NOT silently
     # routed to vendors you didn't choose. For ordered fallback, list several,
     # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
+    # get_news / get_global_news are the exception: every successful vendor in
+    # the list is concatenated (A-share Chinese coverage + overseas headlines).
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "core_stock_apis": "akshare,yfinance",  # A-share OHLCV via AKTools first; US falls through
+        "technical_indicators": "akshare,yfinance",
+        "fundamental_data": "akshare,yfinance",  # A-share filings via AKTools; US falls through
+        "news_data": "akshare,yfinance",     # Options: akshare, yfinance, alpha_vantage, google (global only)
+        "ashare_tape": "akshare",            # A-share next-session tape (needs [akshare])
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
         "prediction_markets": "polymarket",  # Options: polymarket (keyless)
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {
-        # Example: "get_stock_data": "alpha_vantage",  # Override category default
+        # Company news stays akshare + yfinance. Overseas global news is Serper
+        # Google Search (or News RSS if SERPER_API_KEY is unset), not Yahoo Search.
+        "get_global_news": "akshare,google",
     },
     # Benchmark for alpha calculation in the reflection layer.
     # ``benchmark_ticker`` (when set) overrides the suffix map for all
@@ -164,7 +195,9 @@ DEFAULT_CONFIG = _apply_env_overrides({
         ".TO":  "^GSPTSE",     # Toronto (TSX Composite)
         ".AX":  "^AXJO",       # Australia (ASX 200)
         ".SS":  "000001.SS",   # Shanghai (SSE Composite)
+        ".SH":  "000001.SS",   # broker suffix for Shanghai
         ".SZ":  "399001.SZ",   # Shenzhen (SZSE Component)
+        ".BJ":  "000300.SS",   # Beijing listings vs CSI 300 (Yahoo has no BSE 50)
         "":     "SPY",         # default for US-listed tickers (no suffix)
     },
 })

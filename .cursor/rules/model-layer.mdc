@@ -1,0 +1,7 @@
+---
+description: AgentState, Pydantic schemas, and LLM catalog
+globs: tradingagents/agents/schemas.py,tradingagents/agents/utils/agent_states.py,tradingagents/llm_clients/**/*.py
+alwaysApply: false
+---
+
+Read and follow `docs/agent-rules/model-layer.md`.

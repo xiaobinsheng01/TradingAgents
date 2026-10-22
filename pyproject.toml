@@ -38,21 +38,34 @@ dev = [
     "ruff>=0.15",
     "pytest>=8.0",
     "pytest-subtests>=0.13",
+    "fastapi>=0.115",
+    "httpx>=0.27",
 ]
 # Amazon Bedrock support (AWS SigV4 auth + boto3). Optional so the core install
 # stays lean: pip install "tradingagents[bedrock]".
 bedrock = [
     "langchain-aws>=1.5.0",
 ]
+# China A-share news (East Money, filings, CCTV/newswire) via AKShare.
+# Optional: pip install "tradingagents[akshare]".
+akshare = [
+    "akshare>=1.16",
+]
+# Local web console (loopback UI). Not a public API.
+web = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*"]
+include = ["tradingagents*", "cli*", "web*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
+web = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,6 @@
+---
+description: Load TradingAgents project context and development loop
+alwaysApply: true
+---
+
+Read and follow `docs/agent-rules/project-context.md`.

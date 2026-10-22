@@ -5,11 +5,13 @@ from datetime import datetime, timezone
 
 import yfinance as yf
 from dateutil.relativedelta import relativedelta
+from yfinance.exceptions import YFRateLimitError
 
 from .config import get_config
 from .date_window import in_window
+from .errors import VendorRateLimitError
 from .stockstats_utils import yf_retry
-from .symbol_utils import normalize_symbol
+from .symbol_utils import normalize_symbol, raise_if_a_share_yahoo
 
 
 def _extract_article_data(article: dict) -> dict:
@@ -77,6 +79,7 @@ def get_news_yfinance(
         Formatted string containing news articles
     """
     article_limit = get_config()["news_article_limit"]
+    raise_if_a_share_yahoo(ticker, "news")
     # Query Yahoo with the canonical symbol, like every other yfinance path —
     # a raw broker/forex/crypto alias (XAUUSD, BTCUSD) otherwise silently
     # returns no news. Keep the user's ticker in the report header.
@@ -150,11 +153,16 @@ def get_global_news_yfinance(
 
     try:
         for query in search_queries:
-            search = yf_retry(lambda q=query: yf.Search(
-                query=q,
-                news_count=limit,
-                enable_fuzzy_query=True,
-            ))
+            try:
+                search = yf.Search(
+                    query=query,
+                    news_count=limit,
+                    enable_fuzzy_query=True,
+                )
+            except YFRateLimitError as e:
+                raise VendorRateLimitError(
+                    "yfinance global news rate-limited"
+                ) from e
 
             if search.news:
                 for article in search.news:
@@ -204,5 +212,7 @@ def get_global_news_yfinance(
 
         return f"## Global Market News, from {start_date} to {curr_date}:\n\n{news_str}"
 
+    except VendorRateLimitError:
+        raise
     except Exception as e:
         return f"Error fetching global news: {str(e)}"

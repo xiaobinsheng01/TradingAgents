@@ -28,6 +28,7 @@ def test_registry_membership():
     ("openai", None, NormalizedChatOpenAI, True),
     ("xai", "https://api.x.ai/v1", NormalizedChatOpenAI, False),
     ("deepseek", "https://api.deepseek.com", DeepSeekChatOpenAI, False),
+    ("doubao", "https://ark.cn-beijing.volces.com/api/v3", NormalizedChatOpenAI, False),
     ("qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", NormalizedChatOpenAI, False),
     ("qwen-cn", "https://dashscope.aliyuncs.com/compatible-mode/v1", NormalizedChatOpenAI, False),
     ("glm", "https://api.z.ai/api/paas/v4/", NormalizedChatOpenAI, False),

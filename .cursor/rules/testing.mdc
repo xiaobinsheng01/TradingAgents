@@ -1,0 +1,7 @@
+---
+description: Pytest conventions and fixtures for this repository
+globs: tests/**/*.py
+alwaysApply: false
+---
+
+Read and follow `docs/agent-rules/testing.md`.

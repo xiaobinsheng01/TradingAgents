@@ -1,0 +1,7 @@
+---
+description: LangGraph orchestration, agent factories, and CLI
+globs: tradingagents/graph/**/*.py,tradingagents/agents/**/*.py,cli/**/*.py
+alwaysApply: false
+---
+
+Read and follow `docs/agent-rules/service-layer.md`.

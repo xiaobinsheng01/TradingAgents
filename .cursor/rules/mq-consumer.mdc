@@ -1,0 +1,7 @@
+---
+description: No message-queue layer exists; do not invent one
+globs: "**/mq/**/*.py"
+alwaysApply: false
+---
+
+Read and follow `docs/agent-rules/mq-consumer.md`.

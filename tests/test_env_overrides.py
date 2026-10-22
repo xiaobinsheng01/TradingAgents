@@ -26,6 +26,8 @@ def test_no_env_uses_built_in_defaults(monkeypatch):
     assert dc.DEFAULT_CONFIG["backend_url"] is None
     assert dc.DEFAULT_CONFIG["max_debate_rounds"] == 1
     assert dc.DEFAULT_CONFIG["checkpoint_enabled"] is False
+    assert dc.DEFAULT_CONFIG["akshare_base_url"] is None
+    assert dc.DEFAULT_CONFIG["swing_tape_window"] == "half_month"
 
 
 def test_string_overrides(monkeypatch):
@@ -42,6 +44,14 @@ def test_string_overrides(monkeypatch):
     assert dc.DEFAULT_CONFIG["quick_think_llm"] == "gemini-3-flash-preview"
     assert dc.DEFAULT_CONFIG["backend_url"] == "https://example.invalid/v1"
     assert dc.DEFAULT_CONFIG["output_language"] == "Chinese"
+
+
+def test_akshare_base_url_override(monkeypatch):
+    dc = _reload_with_env(
+        monkeypatch,
+        TRADINGAGENTS_AKSHARE_BASE_URL="http://127.0.0.1:8080",
+    )
+    assert dc.DEFAULT_CONFIG["akshare_base_url"] == "http://127.0.0.1:8080"
 
 
 def test_int_coercion(monkeypatch):

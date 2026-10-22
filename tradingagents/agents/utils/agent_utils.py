@@ -7,6 +7,10 @@ import yfinance as yf
 from langchain_core.messages import HumanMessage, RemoveMessage
 
 # Import tools from separate utility files
+from tradingagents.agents.utils.ashare_market_tools import (
+    get_ashare_short_horizon,
+    get_ashare_swing_tape,
+)
 from tradingagents.agents.utils.core_stock_tools import get_stock_data
 from tradingagents.agents.utils.fundamental_data_tools import (
     get_balance_sheet,
@@ -28,6 +32,8 @@ from tradingagents.agents.utils.technical_indicators_tools import get_indicators
 # import them from one place, plus the instrument/language helpers defined below.
 __all__ = [
     "get_stock_data",
+    "get_ashare_short_horizon",
+    "get_ashare_swing_tape",
     "get_indicators",
     "get_fundamentals",
     "get_balance_sheet",
@@ -41,6 +47,7 @@ __all__ = [
     "get_verified_market_snapshot",
     "build_instrument_context",
     "resolve_instrument_identity",
+    "instrument_identity_for_run",
     "get_instrument_context_from_state",
     "get_language_instruction",
     "create_msg_delete",
@@ -99,15 +106,27 @@ def resolve_instrument_identity(ticker: str) -> dict:
     the price action to a narrative and invent an identity that then cascaded
     through every downstream agent.
 
-    Best-effort by design: if yfinance is unavailable, rate-limited, or doesn't
-    recognise the ticker, we return ``{}`` and the caller falls back to
-    ticker-only context rather than failing before analysis starts. Cached so
-    the lookup happens at most once per ticker per process.
+    China A-shares use AKTools plus syntactic board/exchange from the six-digit
+    code — never Yahoo. Other listings still use yfinance ``info``.
+
+    Best-effort by design: if the vendor is unavailable, rate-limited, or
+    doesn't recognise the ticker, we return ``{}`` (or a name-less A-share
+    board card) and the caller falls back rather than failing before analysis
+    starts. Cached so the lookup happens at most once per ticker per process.
 
     The symbol is normalized first (e.g. ``XAUUSD`` -> ``GC=F``) so identity
     resolves for the same instrument the price path actually fetches (#983).
     """
-    from tradingagents.dataflows.symbol_utils import normalize_symbol
+    from tradingagents.dataflows.symbol_utils import a_share_code, normalize_symbol
+
+    if a_share_code(ticker) is not None:
+        try:
+            from tradingagents.dataflows.akshare_market import resolve_a_share_identity
+
+            return resolve_a_share_identity(ticker)
+        except Exception as exc:  # noqa: BLE001 — fail open, never block the run
+            logger.debug("Could not resolve A-share identity for %s: %s", ticker, exc)
+            return {}
 
     try:
         info = yf.Ticker(normalize_symbol(ticker)).info or {}
@@ -133,6 +152,33 @@ def resolve_instrument_identity(ticker: str) -> dict:
     return identity
 
 
+def _with_a_share_limit(ticker: str, identity: Mapping[str, str], trade_date: str | None) -> dict[str, str]:
+    """Copy identity and attach the point-in-time daily limit for A-shares."""
+    from datetime import datetime
+
+    from tradingagents.dataflows.symbol_utils import a_share_code, a_share_limit_pct
+
+    out = {key: value for key, value in identity.items() if value}
+    code = a_share_code(ticker)
+    if code is None:
+        return out
+    as_of = trade_date
+    if not as_of:
+        as_of = datetime.now().strftime("%Y-%m-%d")
+    try:
+        datetime.strptime(as_of, "%Y-%m-%d")
+    except ValueError:
+        return out
+    is_st = out.get("board_type") == "st"
+    out["limit_pct"] = f"{a_share_limit_pct(code, as_of, is_st=is_st):g}"
+    return out
+
+
+def instrument_identity_for_run(ticker: str, trade_date: str | None = None) -> dict[str, str]:
+    """Cached vendor identity plus point-in-time A-share limit for this run."""
+    return _with_a_share_limit(ticker, resolve_instrument_identity(ticker), trade_date)
+
+
 def build_instrument_context(
     ticker: str,
     asset_type: str = "stock",
@@ -155,6 +201,8 @@ def build_instrument_context(
 
     details = []
     if identity:
+        if identity.get("market"):
+            details.append(identity["market"])
         name = identity.get("company_name") or identity.get("name")
         if name:
             details.append(f"{'Name' if is_crypto else 'Company'}: {name}")
@@ -167,12 +215,25 @@ def build_instrument_context(
             details.append(f"Industry: {industry}")
         if identity.get("exchange"):
             details.append(f"Exchange: {identity['exchange']}")
+        if identity.get("board_type"):
+            board = identity["board_type"]
+            limit = identity.get("limit_pct")
+            if limit:
+                details.append(f"Board: {board} ({limit}% daily limit)")
+            else:
+                details.append(f"Board: {board}")
 
     if details:
         context += (
             f" Resolved identity: {'; '.join(details)}. "
             "Do not substitute a different company or ticker unless a tool "
             "result explicitly disproves this resolved identity."
+        )
+
+    if identity and identity.get("market") == "China A-share":
+        context += (
+            " Treat it as a China A-share: use AKTools/tape prices and "
+            "mainland session rules, not US hours or Yahoo as the price source."
         )
 
     if is_crypto:

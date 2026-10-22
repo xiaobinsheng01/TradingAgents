@@ -56,7 +56,11 @@ def test_detect_asset_type(raw, expected):
     assert detect_asset_type(raw) == expected
 
 
-def test_cli_normalize_delegates_to_data_layer():
-    # CLI must produce the same canonical symbol the data path will price.
+def test_cli_normalize_preserves_a_share_broker_suffix():
+    assert normalize_ticker_symbol("601061.SH") == "601061.SH"
+    assert normalize_symbol("601061.SH") == "601061.SS"
+
+
+def test_cli_normalize_delegates_aliases_to_data_layer():
     for raw in ("XAUUSD", "BTCUSD", "btc-usdt", "AAPL"):
         assert normalize_ticker_symbol(raw) == normalize_symbol(raw)

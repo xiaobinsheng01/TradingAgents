@@ -109,7 +109,8 @@ def normalize_symbol(raw: str) -> str:
       2. Crypto rule: a known crypto base quoted in USD/USDT/USDC (dashed or
          not) -> ``BASE-USD``.
       3. Forex rule: six letters that are two ISO currency codes -> ``PAIR=X``.
-      4. Otherwise the upper-cased symbol is returned unchanged (plain
+      4. A-share broker suffixes: Shanghai ``.SH`` / bare 6xxxxx → Yahoo ``.SS``.
+      5. Otherwise the upper-cased symbol is returned unchanged (plain
          equities, ETFs, Yahoo-native symbols like ``GC=F`` or ``^GSPC``).
 
     A trailing ``+`` (broker CFD marker, e.g. ``XAUUSD+``) is stripped before
@@ -133,6 +134,10 @@ def normalize_symbol(raw: str) -> str:
     else:
         canonical = s
 
+    yahoo_a = _yahoo_a_share_symbol(canonical)
+    if yahoo_a is not None:
+        canonical = yahoo_a
+
     if canonical != raw.strip().upper():
         logger.info("Resolved symbol %r to Yahoo symbol %r", raw, canonical)
     return canonical
@@ -141,3 +146,129 @@ def normalize_symbol(raw: str) -> str:
 def is_yahoo_safe(symbol: str) -> bool:
     """True when ``symbol`` only contains characters Yahoo symbols use."""
     return bool(symbol) and _YAHOO_SAFE.fullmatch(symbol) is not None
+
+
+# Yahoo / broker suffixes that mark a six-digit code as a mainland listing.
+# Yahoo uses ``.SS`` for Shanghai; Chinese brokers often write ``.SH``.
+_A_SHARE_SUFFIXES = (".SS", ".SZ", ".SH", ".BJ")
+
+
+def a_share_prefixed_symbol(code: str) -> str:
+    """Sina/Tencent-style prefix: ``sh601061``, ``sz000001``, ``bj430047``."""
+    if code.startswith("920") or code[0] in "48":
+        return f"bj{code}"
+    if code[0] in "03":
+        return f"sz{code}"
+    return f"sh{code}"
+
+
+def raise_if_a_share_yahoo(raw: str, action: str) -> None:
+    """Do not spend Yahoo 404/429 budget on mainland listings.
+
+    East Money/Tencent/Sina via AKTools are the A-share path. Yahoo either
+    404s (``.SH`` / small caps) or 429s after retries, which stalls the graph.
+    """
+    code = a_share_code(raw)
+    if code is None:
+        return
+    raise NoMarketDataError(
+        raw,
+        _yahoo_a_share_symbol(raw) or raw,
+        f"Yahoo {action} skipped for China A-share {code}",
+    )
+
+
+def a_share_code(raw: str) -> str | None:
+    """Return the 6-digit A-share code, or None if ``raw`` is not an A-share.
+
+    Accepts Yahoo (``600519.SS``), broker (``600519.SH`` / ``000001.SZ``),
+    Beijing (``.BJ``), and a bare six-digit code. Purely syntactic — no network.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+
+    s = raw.strip().upper().rstrip("+")
+    for suffix in _A_SHARE_SUFFIXES:
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+            break
+    if re.fullmatch(r"\d{6}", s) is None:
+        return None
+    # 0/3 Shenzhen (main, SME, ChiNext), 6 Shanghai (main, STAR), 4/8/920 BSE.
+    # 2xxxx Shenzhen B-shares and 900xxx Shanghai B-shares are not A-shares.
+    if s[0] in "03648" or s.startswith("920"):
+        return s
+    return None
+
+
+def _yahoo_a_share_symbol(raw: str) -> str | None:
+    """Yahoo lists Shanghai as ``.SS``; brokers often write ``.SH``."""
+    code = a_share_code(raw)
+    if code is None:
+        return None
+    if code.startswith("920") or code[0] in "48":
+        return f"{code}.BJ"
+    if code[0] in "03":
+        return f"{code}.SZ"
+    return f"{code}.SS"
+
+
+def run_ticker_symbol(raw: str) -> str:
+    """Ticker stored on a CLI/Web run (``company_of_interest``).
+
+    Keep the A-share suffix the user typed (``.SH`` / ``.SZ`` / ``.BJ`` /
+    ``.SS``). Bare six-digit codes still get a Yahoo exchange suffix.
+    Crypto, forex, and metal aliases still go through ``normalize_symbol``.
+    Yahoo vendor calls must keep using ``normalize_symbol`` so Shanghai is
+    queried as ``.SS``.
+    """
+    code = a_share_code(raw)
+    if code is not None:
+        text = raw.strip().upper().rstrip("+")
+        for suffix in _A_SHARE_SUFFIXES:
+            if text.endswith(suffix):
+                return f"{code}{suffix}"
+        yahoo = _yahoo_a_share_symbol(code)
+        return yahoo if yahoo is not None else code
+    return normalize_symbol(raw)
+
+
+def a_share_exchange_name(code: str) -> str:
+    """Listing venue for a six-digit A-share code: SSE / SZSE / BSE."""
+    if code.startswith("920") or code[0] in "48":
+        return "BSE"
+    if code[0] in "03":
+        return "SZSE"
+    return "SSE"
+
+
+def a_share_board_type(code: str, *, is_st: bool = False) -> str:
+    """Board bucket for an A-share code: main / chinext / star / bse / st."""
+    if is_st:
+        return "st"
+    if code.startswith(("688", "689")):
+        return "star"
+    if code.startswith(("300", "301")):
+        return "chinext"
+    if code[0] in "48" or code.startswith("920"):
+        return "bse"
+    return "main"
+
+
+def a_share_limit_pct(code: str, as_of: str, *, is_st: bool = False) -> float:
+    """Daily limit in percent for ``code`` on ``as_of`` (yyyy-mm-dd).
+
+    ChiNext switched from 10% to 20% on 2020-08-24. ST is 5%. This is the
+    trading-rule input for next-session prediction; it is not a valuation.
+    """
+    if is_st:
+        return 5.0
+    kind = a_share_board_type(code)
+    if kind == "star":
+        return 20.0
+    if kind == "chinext":
+        return 20.0 if as_of >= "2020-08-24" else 10.0
+    if kind == "bse":
+        return 30.0
+    return 10.0
+

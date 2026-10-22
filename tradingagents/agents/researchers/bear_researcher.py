@@ -3,6 +3,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_language_instruction,
     opponent_argument_or_opening,
 )
+from tradingagents.agents.utils.rating import T1_BIAS_INSTRUCTION
 
 
 def create_bear_researcher(llm):
@@ -42,12 +43,12 @@ Resources available:
 {instrument_context}
 Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
-Latest world affairs news: {news_report}
+Company/ticker news report (cite global or macro items only if they affect this listing): {news_report}
 {fundamentals_label}: {fundamentals_report}
 Conversation history of the debate: {history}
 Last bull argument: {current_response}
 Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
-""" + get_language_instruction()
+""" + T1_BIAS_INSTRUCTION + get_language_instruction()
 
         response = llm.invoke(prompt)
 

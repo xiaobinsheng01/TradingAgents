@@ -1,5 +1,23 @@
+import json
 import logging
 
+from .akshare_flow import get_insider_transactions as get_akshare_insider_transactions
+from .akshare_fundamentals import (
+    get_balance_sheet as get_akshare_balance_sheet,
+    get_cashflow as get_akshare_cashflow,
+    get_fundamentals as get_akshare_fundamentals,
+    get_income_statement as get_akshare_income_statement,
+)
+from .akshare_market import (
+    get_akshare_indicators,
+    get_akshare_stock_data,
+    get_ashare_short_horizon as get_akshare_short_horizon,
+    get_ashare_swing_tape as get_akshare_swing_tape,
+)
+from .akshare_news import (
+    get_global_news as get_akshare_global_news,
+    get_news as get_akshare_news,
+)
 from .alpha_vantage import (
     get_balance_sheet as get_alpha_vantage_balance_sheet,
     get_cashflow as get_alpha_vantage_cashflow,
@@ -18,6 +36,7 @@ from .errors import (
     VendorRateLimitError,
 )
 from .fred import get_macro_data as get_fred_macro_data
+from .google_news import get_global_news as get_google_global_news
 from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
 from .y_finance import (
     get_balance_sheet as get_yfinance_balance_sheet,
@@ -38,6 +57,13 @@ TOOLS_CATEGORIES = {
         "description": "OHLCV stock price data",
         "tools": [
             "get_stock_data"
+        ]
+    },
+    "ashare_tape": {
+        "description": "A-share short-horizon tape (limits, breadth, lagged flows, events)",
+        "tools": [
+            "get_ashare_short_horizon",
+            "get_ashare_swing_tape",
         ]
     },
     "technical_indicators": {
@@ -82,54 +108,84 @@ VENDOR_LIST = [
     "fred",
     "polymarket",
     "alpha_vantage",
+    "akshare",
+    "google",
 ]
 
-# Optional enrichment categories. These add macro/event context to the news
-# analyst but are not core to a decision, so a vendor failure here degrades to a
-# sentinel instead of aborting the run (a bad LLM-supplied indicator, a missing
-# key, or a network blip should not crash an analysis over flavour data). Core
-# categories (prices, fundamentals, news) still raise so a broken primary is loud.
-OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets"}
+# News methods concatenate every successful vendor in the configured list so
+# A-share Chinese coverage and overseas headlines land in one report. Other
+# methods stay first-success fallback (see Tech Library 20260914).
+AGGREGATE_METHODS = frozenset({"get_news", "get_global_news"})
+
+_UNUSABLE_NEWS_PREFIXES = (
+    "NO_DATA_AVAILABLE",
+    "DATA_UNAVAILABLE",
+    "No news found",
+    "No global news found",
+    "Error fetching",
+)
+
+# Optional enrichment categories. These add context but are not required to
+# finish a run: missing FRED, Polymarket, or the A-share tape extra degrades
+# to a sentinel instead of aborting. Core prices / fundamentals / news still
+# raise so a broken primary is loud.
+OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets", "ashare_tape"}
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
+        "akshare": get_akshare_stock_data,
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
     },
+    "get_ashare_short_horizon": {
+        "akshare": get_akshare_short_horizon,
+    },
+    "get_ashare_swing_tape": {
+        "akshare": get_akshare_swing_tape,
+    },
     # technical_indicators
     "get_indicators": {
+        "akshare": get_akshare_indicators,
         "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
     },
     # fundamental_data
     "get_fundamentals": {
+        "akshare": get_akshare_fundamentals,
         "alpha_vantage": get_alpha_vantage_fundamentals,
         "yfinance": get_yfinance_fundamentals,
     },
     "get_balance_sheet": {
+        "akshare": get_akshare_balance_sheet,
         "alpha_vantage": get_alpha_vantage_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
     },
     "get_cashflow": {
+        "akshare": get_akshare_cashflow,
         "alpha_vantage": get_alpha_vantage_cashflow,
         "yfinance": get_yfinance_cashflow,
     },
     "get_income_statement": {
+        "akshare": get_akshare_income_statement,
         "alpha_vantage": get_alpha_vantage_income_statement,
         "yfinance": get_yfinance_income_statement,
     },
     # news_data
     "get_news": {
+        "akshare": get_akshare_news,
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
     },
     "get_global_news": {
+        "akshare": get_akshare_global_news,
+        "google": get_google_global_news,
         "yfinance": get_global_news_yfinance,
         "alpha_vantage": get_alpha_vantage_global_news,
     },
     "get_insider_transactions": {
+        "akshare": get_akshare_insider_transactions,
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
     },
@@ -165,6 +221,22 @@ def get_vendor(category: str, method: str = None) -> str:
     # Fall back to category-level configuration
     return config.get("data_vendors", {}).get(category, "default")
 
+
+def _stringify_vendor_result(result) -> str:
+    if isinstance(result, str):
+        return result
+    if isinstance(result, dict):
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    return str(result)
+
+
+def _is_usable_news_chunk(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return not stripped.startswith(_UNUSABLE_NEWS_PREFIXES)
+
+
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
     category = get_category_for_method(method)
@@ -194,12 +266,15 @@ def route_to_vendor(method: str, *args, **kwargs):
 
     last_no_data: NoMarketDataError | None = None
     first_error: Exception | None = None
+    aggregate = method in AGGREGATE_METHODS
+    chunks: list[tuple[str, str]] = []
+    skipped_results: list[str] = []
     for vendor in vendor_chain:
         vendor_impl = VENDOR_METHODS[method][vendor]
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
         try:
-            return impl_func(*args, **kwargs)
+            result = impl_func(*args, **kwargs)
         except VendorRateLimitError:
             logger.warning("Vendor %r rate-limited for %s; trying next vendor.", vendor, method)
             continue
@@ -219,6 +294,23 @@ def route_to_vendor(method: str, *args, **kwargs):
             if first_error is None:
                 first_error = e
             continue
+
+        if not aggregate:
+            return result
+
+        text = _stringify_vendor_result(result)
+        if _is_usable_news_chunk(text):
+            chunks.append((vendor, text.strip()))
+        else:
+            skipped_results.append(text)
+
+    if aggregate and chunks:
+        return "\n\n".join(
+            f"## Source: {vendor}\n\n{body}" for vendor, body in chunks
+        )
+    if aggregate and skipped_results and last_no_data is None and first_error is None:
+        # Preserve yfinance-style "No news found" when it was the only outcome.
+        return skipped_results[0]
 
     # If any vendor reported "no data", the symbol is genuinely unavailable.
     # Return one explicit, instructive sentinel rather than a vendor-specific

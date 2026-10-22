@@ -6,9 +6,11 @@ import pytest
 
 from tradingagents.dataflows.symbol_utils import (
     NoMarketDataError,
+    a_share_code,
     crypto_base,
     is_yahoo_safe,
     normalize_symbol,
+    run_ticker_symbol,
 )
 
 
@@ -17,6 +19,19 @@ class TestNormalizeSymbol(unittest.TestCase):
     def test_plain_equities_unchanged(self):
         for sym in ("AAPL", "MSFT", "TSM", "BRK.B", "0700.HK", "^GSPC", "GC=F"):
             self.assertEqual(normalize_symbol(sym), sym)
+
+    def test_shanghai_broker_suffix_maps_to_yahoo_ss(self):
+        self.assertEqual(normalize_symbol("601061.SH"), "601061.SS")
+        self.assertEqual(normalize_symbol("600519.SS"), "600519.SS")
+        self.assertEqual(normalize_symbol("600519"), "600519.SS")
+        self.assertEqual(normalize_symbol("000001.SZ"), "000001.SZ")
+
+    def test_run_ticker_keeps_shanghai_broker_suffix(self):
+        self.assertEqual(run_ticker_symbol("601061.SH"), "601061.SH")
+        self.assertEqual(run_ticker_symbol("601061.ss"), "601061.SS")
+        self.assertEqual(run_ticker_symbol("601061"), "601061.SS")
+        self.assertEqual(run_ticker_symbol("000001.SZ"), "000001.SZ")
+        self.assertEqual(run_ticker_symbol("BTCUSD"), "BTC-USD")
 
     def test_lowercases_are_upper(self):
         self.assertEqual(normalize_symbol("aapl"), "AAPL")
@@ -96,6 +111,71 @@ class TestCryptoBase(unittest.TestCase):
         # crypto_base is the shared primitive behind the -USD normalization.
         self.assertEqual(normalize_symbol("BTCUSD"), "BTC-USD")
         self.assertEqual(crypto_base("BTCUSD"), "BTC")
+
+
+@pytest.mark.unit
+class TestAShareCode(unittest.TestCase):
+    def test_yahoo_and_broker_suffixes(self):
+        self.assertEqual(a_share_code("600519.SS"), "600519")
+        self.assertEqual(a_share_code("600519.SH"), "600519")
+        self.assertEqual(a_share_code("000001.SZ"), "000001")
+        self.assertEqual(a_share_code("300750.SZ"), "300750")
+        self.assertEqual(a_share_code("688111.SS"), "688111")
+        self.assertEqual(a_share_code("430047.BJ"), "430047")
+
+    def test_bare_six_digit_code(self):
+        self.assertEqual(a_share_code("600519"), "600519")
+        self.assertEqual(a_share_code("000001"), "000001")
+
+    def test_non_a_share_returns_none(self):
+        for raw in ("AAPL", "0700.HK", "7203.T", "BTC-USD", "900947", "", None):
+            self.assertIsNone(a_share_code(raw))
+
+    def test_prefixed_sina_tencent_symbol(self):
+        from tradingagents.dataflows.symbol_utils import a_share_prefixed_symbol
+
+        self.assertEqual(a_share_prefixed_symbol("601061"), "sh601061")
+        self.assertEqual(a_share_prefixed_symbol("000001"), "sz000001")
+        self.assertEqual(a_share_prefixed_symbol("300750"), "sz300750")
+        self.assertEqual(a_share_prefixed_symbol("430047"), "bj430047")
+        self.assertEqual(a_share_prefixed_symbol("920001"), "bj920001")
+
+    def test_yahoo_skip_raises_for_a_share(self):
+        from tradingagents.dataflows.symbol_utils import raise_if_a_share_yahoo
+
+        with self.assertRaises(NoMarketDataError) as ctx:
+            raise_if_a_share_yahoo("601061.SH", "news")
+        self.assertIn("601061", str(ctx.exception))
+        raise_if_a_share_yahoo("AAPL", "news")
+
+
+@pytest.mark.unit
+class TestAShareBoardRules(unittest.TestCase):
+    def test_board_type_by_code(self):
+        from tradingagents.dataflows.symbol_utils import a_share_board_type
+
+        self.assertEqual(a_share_board_type("600519"), "main")
+        self.assertEqual(a_share_board_type("300750"), "chinext")
+        self.assertEqual(a_share_board_type("688111"), "star")
+        self.assertEqual(a_share_board_type("430047"), "bse")
+        self.assertEqual(a_share_board_type("600519", is_st=True), "st")
+
+    def test_exchange_name_by_code(self):
+        from tradingagents.dataflows.symbol_utils import a_share_exchange_name
+
+        self.assertEqual(a_share_exchange_name("601061"), "SSE")
+        self.assertEqual(a_share_exchange_name("000001"), "SZSE")
+        self.assertEqual(a_share_exchange_name("430047"), "BSE")
+
+    def test_limit_pct_chinext_reform_and_st(self):
+        from tradingagents.dataflows.symbol_utils import a_share_limit_pct
+
+        self.assertEqual(a_share_limit_pct("300750", "2020-08-23"), 10.0)
+        self.assertEqual(a_share_limit_pct("300750", "2020-08-24"), 20.0)
+        self.assertEqual(a_share_limit_pct("600519", "2026-01-10"), 10.0)
+        self.assertEqual(a_share_limit_pct("688111", "2026-01-10"), 20.0)
+        self.assertEqual(a_share_limit_pct("600519", "2026-01-10", is_st=True), 5.0)
+
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ class TestVerifiedSnapshot:
         assert "Latest trading row used: 2026-05-13" in snap
         assert "999.00" not in snap          # future row excluded
         assert "boll_lb" in snap             # indicators present
+        assert "OHLCV source matches get_stock_data" in snap
 
     def test_uses_previous_trading_day_when_date_is_weekend(self, monkeypatch):
         monkeypatch.setattr(validator, "load_ohlcv", lambda s, d: _sample_ohlcv())

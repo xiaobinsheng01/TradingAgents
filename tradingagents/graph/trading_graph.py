@@ -14,6 +14,8 @@ from langgraph.prebuilt import ToolNode
 # Import the abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    get_ashare_short_horizon,
+    get_ashare_swing_tape,
     get_balance_sheet,
     get_cashflow,
     get_fundamentals,
@@ -26,7 +28,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_prediction_markets,
     get_stock_data,
     get_verified_market_snapshot,
-    resolve_instrument_identity,
+    instrument_identity_for_run,
 )
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.dataflows.config import set_config
@@ -214,6 +216,8 @@ class TradingAgentsGraph:
                 [
                     # Core stock data tools
                     get_stock_data,
+                    get_ashare_short_horizon,
+                    get_ashare_swing_tape,
                     # Technical indicators
                     get_indicators,
                     # Deterministic verification snapshot (bound to the analyst
@@ -245,6 +249,7 @@ class TradingAgentsGraph:
                     get_balance_sheet,
                     get_cashflow,
                     get_income_statement,
+                    get_insider_transactions,
                 ]
             ),
         }
@@ -259,11 +264,24 @@ class TradingAgentsGraph:
         US tickers with dots like ``BRK.B``) also fall back to the empty-suffix
         entry, which is the right default because the alpha calculation works
         in USD.
+
+        A-share codes (including broker ``.SH`` and bare six-digit tickers) use
+        the listing venue, not Yahoo suffix matching, so ``601061.SH`` does
+        not fall through to SPY.
         """
         explicit = self.config.get("benchmark_ticker")
         if explicit:
             return explicit
         benchmark_map = self.config.get("benchmark_map", {})
+        from tradingagents.dataflows.symbol_utils import a_share_code
+
+        code = a_share_code(ticker)
+        if code:
+            if code.startswith("6"):
+                return benchmark_map.get(".SS", "000001.SS")
+            if code.startswith(("4", "8")) or code.startswith("920"):
+                return benchmark_map.get(".BJ", "000300.SS")
+            return benchmark_map.get(".SZ", "399001.SZ")
         ticker_upper = ticker.upper()
         for suffix, benchmark in benchmark_map.items():
             if suffix and ticker_upper.endswith(suffix.upper()):
@@ -283,8 +301,29 @@ class TradingAgentsGraph:
         or ``(None, None, None, None)`` when the outcome cannot be settled yet:
         the full holding window has not traded (#1169), or the symbol is delisted
         or unreachable.
+
+        A-shares use the same AKTools daily path as ``get_stock_data``. Yahoo
+        404s/429s on mainland listings, so they would otherwise stay pending.
         """
-        from tradingagents.dataflows.symbol_utils import normalize_symbol
+        from tradingagents.dataflows.symbol_utils import a_share_code, normalize_symbol
+
+        if a_share_code(ticker):
+            try:
+                from tradingagents.dataflows.akshare_market import realized_holding_returns
+
+                result = realized_holding_returns(
+                    ticker, trade_date, holding_days, benchmark
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not resolve A-share outcome for %s on %s vs %s "
+                    "(will retry next run): %s",
+                    ticker, trade_date, benchmark, e,
+                )
+                return None, None, None, None
+            if result is None:
+                return None, None, None, None
+            return result
 
         try:
             start = datetime.strptime(trade_date, "%Y-%m-%d")
@@ -364,17 +403,31 @@ class TradingAgentsGraph:
         if updates:
             self.memory_log.batch_update_with_outcomes(updates)
 
-    def resolve_instrument_context(self, ticker: str, asset_type: str = "stock") -> str:
+    def resolve_instrument_context(
+        self, ticker: str, asset_type: str = "stock", trade_date: str | None = None
+    ) -> str:
         """Resolve ticker identity once and return the full instrument context.
 
-        Deterministic yfinance lookup (cached, fail-open) injected into a
-        context string so every agent anchors to the real company instead of
+        A-shares use AKTools plus syntactic board/limit (never Yahoo). Other
+        listings use a deterministic yfinance lookup (cached, fail-open).
+        Injected so every agent anchors to the real company instead of
         hallucinating one from the price chart (#814). Both the propagate()
         path and the CLI call this so the resolved identity reaches the whole
         graph regardless of entry point.
         """
-        identity = resolve_instrument_identity(ticker)
-        return build_instrument_context(ticker, asset_type, identity)
+        identity = instrument_identity_for_run(ticker, trade_date)
+        context = build_instrument_context(ticker, asset_type, identity)
+        window = str(self.config.get("swing_tape_window") or "half_month")
+        label = {
+            "half_year": "近半年",
+            "three_months": "近3个月",
+        }.get(window, "近半个月")
+        return (
+            f"{context}\nSwing tape window: {window} ({label}). "
+            f"Call get_ashare_swing_tape(ticker, curr_date, window='{window}') "
+            "for price, volume, 缠论, disclosed 机构出手, and window news. "
+            "Do not invent prints, headlines, 中枢, or 买卖点."
+        )
 
     def _memory_as_of(self, trade_date) -> str | None:
         """Point-in-time cutoff for past-context lessons (#1251).
@@ -516,7 +569,9 @@ class TradingAgentsGraph:
         past_context = self.memory_log.get_past_context(
             company_name, as_of=self._memory_as_of(trade_date)
         )
-        instrument_context = self.resolve_instrument_context(company_name, asset_type)
+        instrument_context = self.resolve_instrument_context(
+            company_name, asset_type, str(trade_date)
+        )
         init_agent_state = self.propagator.create_initial_state(
             company_name,
             trade_date,

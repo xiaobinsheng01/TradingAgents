@@ -1,16 +1,35 @@
 FROM python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=600 \
+    PIP_RETRIES=10
 
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /build
+# Install deps before the full tree so code-only edits reuse this layer.
+COPY pyproject.toml README.md ./
+COPY tradingagents/ tradingagents/
+COPY cli/ cli/
+COPY web/ web/
+# Same Aliyun index as docker/aktools.Dockerfile. PyPI via the host proxy stalls.
+RUN pip install --no-cache-dir \
+    -i https://mirrors.aliyun.com/pypi/simple/ \
+    --trusted-host mirrors.aliyun.com \
+    ".[web]"
 COPY . .
-RUN pip install --no-cache-dir .
 
-FROM python:3.12-slim
+FROM nginx:alpine AS frontend
+
+COPY --from=builder /build/web/static /usr/share/nginx/html
+COPY web/nginx.conf.template /etc/nginx/templates/default.conf.template
+ENV NGINX_ENVSUBST_FILTER=WEB_API_UPSTREAM \
+    WEB_API_UPSTREAM=web-api:8000
+EXPOSE 80
+
+FROM python:3.12-slim AS backend
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

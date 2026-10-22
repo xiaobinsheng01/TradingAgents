@@ -15,6 +15,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
 )
+from tradingagents.agents.utils.rating import T1_BIAS_INSTRUCTION, enforce_t1_bias
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
@@ -32,6 +33,7 @@ def create_portfolio_manager(llm):
         risk_debate_state = state["risk_debate_state"]
         research_plan = state["investment_plan"]
         trader_plan = state["trader_investment_plan"]
+        market_report = (state.get("market_report") or "").strip()
 
         past_context = state.get("past_context", "")
         lessons_line = (
@@ -56,6 +58,7 @@ def create_portfolio_manager(llm):
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
+- Market report: {market_report or "(none)"}
 {lessons_line}
 **Risk Analysts Debate History:**
 {history}
@@ -64,14 +67,18 @@ def create_portfolio_manager(llm):
 
 Ground every conclusion in specific evidence from the analysts. Commit to a directional call only when the evidence clearly supports one; choose Hold when the case is balanced, materially conflicting, ambiguous, or insufficient to justify changing exposure, rather than forcing a direction to appear decisive. Weigh the analysts on their merits, independent of speaking order.
 
+{T1_BIAS_INSTRUCTION}
 {NO_EXTERNAL_TOOLS}{get_language_instruction()}"""
 
-        final_trade_decision = invoke_structured_or_freetext(
-            structured_llm,
-            llm,
-            prompt,
-            render_pm_decision,
-            "Portfolio Manager",
+        final_trade_decision = enforce_t1_bias(
+            invoke_structured_or_freetext(
+                structured_llm,
+                llm,
+                prompt,
+                render_pm_decision,
+                "Portfolio Manager",
+            ),
+            market_report,
         )
 
         new_risk_debate_state = {

@@ -11,6 +11,7 @@ from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     create_msg_delete,
     get_instrument_context_from_state,
+    instrument_identity_for_run,
     resolve_instrument_identity,
 )
 
@@ -65,6 +66,53 @@ class ResolveInstrumentIdentityTests(unittest.TestCase):
         self.assertEqual(first, second)
 
 
+    def test_a_share_does_not_call_yahoo(self):
+        with patch("tradingagents.agents.utils.agent_utils.yf.Ticker") as mock_yf, patch(
+            "tradingagents.dataflows.akshare_market.resolve_a_share_identity",
+            return_value={
+                "market": "China A-share",
+                "company_name": "中信金属",
+                "board_type": "main",
+                "exchange": "SSE",
+            },
+        ):
+            identity = resolve_instrument_identity("601061.SH")
+        mock_yf.assert_not_called()
+        self.assertEqual(identity["company_name"], "中信金属")
+        self.assertEqual(identity["market"], "China A-share")
+
+    def test_a_share_syntactic_card_when_akshare_missing(self):
+        from tradingagents.dataflows.akshare_news import AkshareNotConfiguredError
+
+        with patch("tradingagents.agents.utils.agent_utils.yf.Ticker") as mock_yf, patch(
+            "tradingagents.dataflows.akshare_market._load_akshare",
+            side_effect=AkshareNotConfiguredError("missing"),
+        ):
+            identity = resolve_instrument_identity("601061.SH")
+        mock_yf.assert_not_called()
+        self.assertEqual(identity["market"], "China A-share")
+        self.assertEqual(identity["exchange"], "SSE")
+        self.assertEqual(identity["board_type"], "main")
+        self.assertNotIn("company_name", identity)
+
+    def test_a_share_limit_is_point_in_time_and_does_not_mutate_cache(self):
+        with patch(
+            "tradingagents.dataflows.akshare_market.resolve_a_share_identity",
+            return_value={
+                "market": "China A-share",
+                "board_type": "chinext",
+                "exchange": "SZSE",
+            },
+        ):
+            cached = resolve_instrument_identity("300750.SZ")
+            first = instrument_identity_for_run("300750.SZ", "2020-08-23")
+            second = instrument_identity_for_run("300750.SZ", "2020-08-24")
+        self.assertNotIn("limit_pct", cached)
+        self.assertEqual(first["limit_pct"], "10")
+        self.assertEqual(second["limit_pct"], "20")
+        self.assertNotIn("limit_pct", cached)
+
+
 @pytest.mark.unit
 class BuildInstrumentContextTests(unittest.TestCase):
     def test_mentions_exact_symbol_without_identity(self):
@@ -94,6 +142,23 @@ class BuildInstrumentContextTests(unittest.TestCase):
         )
         self.assertIn("Name: Bitcoin USD", context)
         self.assertIn("crypto asset rather than a company", context)
+
+    def test_injects_a_share_board_and_limit(self):
+        context = build_instrument_context(
+            "601061.SH",
+            "stock",
+            {
+                "market": "China A-share",
+                "company_name": "中信金属",
+                "board_type": "main",
+                "exchange": "SSE",
+                "limit_pct": "10",
+            },
+        )
+        self.assertIn("China A-share", context)
+        self.assertIn("Company: 中信金属", context)
+        self.assertIn("Board: main (10% daily limit)", context)
+        self.assertIn("AKTools/tape", context)
 
 
 @pytest.mark.unit

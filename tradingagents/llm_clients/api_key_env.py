@@ -20,6 +20,9 @@ PROVIDER_API_KEY_ENV: dict[str, str | None] = {
     "bedrock":    None,
     "xai":        "XAI_API_KEY",
     "deepseek":   "DEEPSEEK_API_KEY",
+    # Doubao via Volcengine Ark (China). Inference endpoint IDs (ep-...) are
+    # valid model strings; pick them in the CLI as Custom model ID.
+    "doubao":     "ARK_API_KEY",
     # Dual-region providers each carry their own account; keys are not
     # interchangeable between the international and China endpoints.
     "qwen":       "DASHSCOPE_API_KEY",

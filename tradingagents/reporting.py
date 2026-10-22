@@ -4,10 +4,39 @@ Writes a run's per-section markdown (analysts, research, trading, risk,
 portfolio) plus a consolidated ``complete_report.md`` under ``save_path``. The
 CLI and ``TradingAgentsGraph.save_reports`` both call this, so a headless / API
 run produces the same on-disk report tree a CLI run does.
+
+Lookup of the newest tree is file-based (no ORM). Saved runs live under
+``results_dir/reports/<ticker>_<stamp>/``.
 """
 
+from __future__ import annotations
+
+import json
+import logging
+import re
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+from tradingagents.dataflows.utils import safe_ticker_component
+
+logger = logging.getLogger(__name__)
+
+_RUN_STAMP_RE = re.compile(r"^(?P<ticker>.+)_(?P<stamp>\d{8}_\d{6})$")
+_META_NAME = "run_meta.json"
+_COMPLETE_NAME = "complete_report.md"
+
+# UI / SSE report keys → files written by write_report_tree.
+_SECTION_FILES: tuple[tuple[str, str], ...] = (
+    ("swing_tape", "1_analysts/swing_tape.md"),
+    ("market_report", "1_analysts/market.md"),
+    ("sentiment_report", "1_analysts/sentiment.md"),
+    ("news_report", "1_analysts/news.md"),
+    ("fundamentals_report", "1_analysts/fundamentals.md"),
+    ("investment_plan", "2_research/manager.md"),
+    ("trader_investment_plan", "3_trading/trader.md"),
+    ("final_trade_decision", "5_portfolio/decision.md"),
+)
 
 
 def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
@@ -19,6 +48,12 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
     # 1. Analysts
     analysts_dir = save_path / "1_analysts"
     analyst_parts = []
+    if final_state.get("swing_tape"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "swing_tape.md").write_text(
+            final_state["swing_tape"], encoding="utf-8"
+        )
+        analyst_parts.append(("Swing Tape", final_state["swing_tape"]))
     if final_state.get("market_report"):
         analysts_dir.mkdir(exist_ok=True)
         (analysts_dir / "market.md").write_text(final_state["market_report"], encoding="utf-8")
@@ -97,5 +132,129 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
 
     # Write consolidated report
     header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    (save_path / "complete_report.md").write_text(header + "\n\n".join(sections), encoding="utf-8")
-    return save_path / "complete_report.md"
+    (save_path / _COMPLETE_NAME).write_text(header + "\n\n".join(sections), encoding="utf-8")
+    return save_path / _COMPLETE_NAME
+
+
+def reports_root(results_dir) -> Path:
+    """Canonical tree: ``results_dir/reports/<ticker>_<stamp>/``."""
+    return Path(results_dir) / "reports"
+
+
+def write_run_meta(
+    save_path,
+    *,
+    ticker: str,
+    analysis_date: str | None = None,
+) -> Path:
+    """Small sidecar so latest-run lookup keeps ticker/date without re-parsing markdown."""
+    save_path = Path(save_path)
+    save_path.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "ticker": ticker,
+        "analysis_date": analysis_date,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    path = save_path / _META_NAME
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def read_report_tree(save_path) -> dict[str, str]:
+    """Rebuild the SSE ``reports`` map from a ``write_report_tree`` directory."""
+    root = Path(save_path)
+    reports: dict[str, str] = {}
+    for key, rel in _SECTION_FILES:
+        path = root / rel
+        if path.is_file():
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                reports[key] = text
+    return reports
+
+
+def _stamp_mtime(folder: Path) -> float:
+    complete = folder / _COMPLETE_NAME
+    try:
+        return complete.stat().st_mtime
+    except OSError:
+        return folder.stat().st_mtime
+
+
+def _parse_run_dir_name(name: str) -> tuple[str, str] | None:
+    match = _RUN_STAMP_RE.fullmatch(name)
+    if match is None:
+        return None
+    return match.group("ticker"), match.group("stamp")
+
+
+def _iter_report_dirs(results_dir) -> list[Path]:
+    configured = reports_root(results_dir)
+    roots = [configured]
+    cwd_root = Path.cwd() / "reports"
+    try:
+        if cwd_root.resolve() != configured.resolve():
+            roots.append(cwd_root)
+    except OSError:
+        roots.append(cwd_root)
+    found: list[Path] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            children = list(root.iterdir())
+        except OSError as e:
+            logger.warning("cannot list report dir %s: %s", root, e)
+            continue
+        for child in children:
+            if child.is_dir() and (child / _COMPLETE_NAME).is_file():
+                found.append(child)
+    return found
+
+
+def load_latest_run(
+    results_dir,
+    ticker: str | None = None,
+) -> dict[str, Any] | None:
+    """Newest complete report tree under ``results_dir/reports`` (and cwd fallback).
+
+    Optional ``ticker`` is validated with ``safe_ticker_component`` then matched
+    as a directory-name prefix. Missing runs return ``None``.
+    """
+    wanted: str | None = None
+    if ticker is not None and str(ticker).strip():
+        wanted = safe_ticker_component(str(ticker).strip())
+    candidates = _iter_report_dirs(results_dir)
+    if wanted is not None:
+        prefix = f"{wanted}_"
+        candidates = [path for path in candidates if path.name.startswith(prefix)]
+    if not candidates:
+        return None
+    folder = max(candidates, key=_stamp_mtime)
+    reports = read_report_tree(folder)
+    meta: dict[str, Any] = {}
+    meta_path = folder / _META_NAME
+    if meta_path.is_file():
+        try:
+            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("run_meta.json unreadable in %s: %s", folder, e)
+        else:
+            if isinstance(loaded, dict):
+                meta = loaded
+    parsed = _parse_run_dir_name(folder.name)
+    ticker_out = str(meta.get("ticker") or (parsed[0] if parsed else folder.name))
+    analysis_date = meta.get("analysis_date")
+    generated_at = meta.get("generated_at")
+    complete = folder / _COMPLETE_NAME
+    if complete.is_file():
+        reports["complete_report"] = complete.read_text(encoding="utf-8")
+    return {
+        "ticker": ticker_out,
+        "analysis_date": analysis_date,
+        "generated_at": generated_at,
+        "decision": reports.get("final_trade_decision") or "",
+        "reports": reports,
+        "report_path": str(complete),
+        "notice": "Research rating only — this run does not place broker orders.",
+    }
